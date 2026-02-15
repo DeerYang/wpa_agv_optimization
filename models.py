@@ -1,39 +1,74 @@
-# models.py
+# ===================== 文件级说明 =====================
+# 文件名: models.py
+# 功能: 系统核心实体类定义，采用充血模型设计，封装业务属性与基础数据结构
+# 设计原则: 单一职责原则，每个类对应一个业务实体，属性与业务强绑定，无复杂业务逻辑
+# 实体映射: Task=取货任务、AGV=搬运机器人、Wolf=狼群算法中的一个个体(完整调度方案)
+# ======================================================
 
 class Task:
     """
-    任务实体类：代表仓库中的一个取货需求
+    任务实体类
+    职责: 封装仓储场景中一个完整的取货需求的所有属性，对应订单中的单个物料搬运任务
+    业务说明: 每个任务对应仓库中一个固定货位，AGV需要到达该货位完成取货，并满足载重、时间窗约束
     """
     def __init__(self, task_id, x, y, weight, deadline):
-        self.id = task_id       # 任务唯一编号
-        self.x = x              # 目标 X 坐标
-        self.y = y              # 目标 Y 坐标
-        self.weight = weight    # 货物重量
-        self.deadline = deadline # 硬时间窗 (最晚完成时间)
+        # 任务唯一编号，全局唯一标识，用于任务分配、追踪与日志输出
+        self.id = task_id
+        # 任务目标货位X坐标（栅格地图横轴），AGV需要到达的目标位置X
+        self.x = x
+        # 任务目标货位Y坐标（栅格地图纵轴），AGV需要到达的目标位置Y
+        self.y = y
+        # 该任务对应货物的重量(kg)，用于AGV载重约束校验，不可超过AGV最大载重
+        self.weight = weight
+        # 任务硬时间窗-最晚完成时间(秒)，AGV必须在该时间前完成该任务的取货动作，超时会触发惩罚
+        self.deadline = deadline
 
     def __repr__(self):
-        # 打印时的显示格式
+        """
+        任务对象的字符串格式化方法
+        功能: 打印/日志输出时，直观展示任务核心信息，便于调试与结果查看
+        返回值: 格式化后的任务信息字符串
+        """
         return f"Task(ID={self.id}, Pos=({self.x},{self.y}), W={self.weight}, DD={self.deadline})"
+
 
 class AGV:
     """
-    AGV 实体类：代表一辆具体的搬运机器人
+    AGV实体类
+    职责: 封装单台AGV的所有属性、任务分配、路径规划、运行状态数据
+    业务说明: 每一个实例对应一台物理AGV，管理其分配的任务、行驶路径、载重、完成时间等全生命周期数据
     """
     def __init__(self, agv_id, start_pos):
-        self.id = agv_id            # AGV 编号
-        self.start_pos = start_pos  # 初始停泊位置
-        self.tasks = []             # 分配给该车的任务列表
-        self.path = []              # 规划好的完整路径 [(x,y,t), ...]
-        self.load = 0               # 当前累计载重
-        self.finish_time = 0        # 完成所有任务回到终点的时间
+        # AGV全局唯一编号，用于车辆标识、冲突检测、日志追踪
+        self.id = agv_id
+        # AGV初始停泊位置(x,y)，对应Config.START_NODES中的泊位，固定不变
+        self.start_pos = start_pos
+        # 分配给该AGV的任务列表，按执行顺序排序，每个元素为Task实体对象
+        self.tasks = []
+        # AGV完整时空路径列表，每个元素格式为(x,y,t)，x/y为栅格坐标，t为到达该坐标的时间戳
+        # 设计说明: 时空路径同时包含空间与时间维度，用于冲突检测与资源预约
+        self.path = []
+        # AGV当前累计载重(kg)，为tasks列表中所有任务的weight之和，用于载重约束校验
+        self.load = 0
+        # AGV完成所有任务并到达卸货区的最终时间(秒)，用于时间窗惩罚计算与系统效率评估
+        self.finish_time = 0
+
 
 class Wolf:
     """
-    狼实体类 (Wolf)：代表一个完整的调度方案 (Solution)
+    狼实体类（狼群算法核心个体）
+    职责: 代表狼群算法中的一个完整解，即一套多AGV协同调度的完整方案
+    算法映射: 对应开题报告中狼群算法的个体编码，每只狼的适应度对应调度方案的总成本
+    设计说明: 聚合了该方案下所有AGV的调度数据，以及方案的整体评估指标
     """
     def __init__(self):
-        self.agv_list = []      # 该方案中所有激活的 AGV 对象列表
-        self.fitness = 0.0      # 适应度评分 (越小越好)
-        self.vehicle_num = 0    # N: 使用车辆数
-        self.total_dist = 0     # D: 总行驶距离
-        self.time_penalty = 0   # T: 时间窗罚分
+        # 该调度方案中所有AGV对象列表，包含已分配任务和未分配任务的AGV
+        self.agv_list = []
+        # 适应度评分，对应开题报告中的多目标加权目标函数F，值越小代表方案越优
+        self.fitness = 0.0
+        # 该方案中实际执行任务的AGV数量N，仅统计有任务分配的车辆，为优化目标之一
+        self.vehicle_num = 0
+        # 该方案中所有AGV的总行驶距离D，单位：栅格数，为优化目标之一
+        self.total_dist = 0
+        # 该方案中所有任务违反时间窗的总惩罚T，单位：秒，为优化目标之一
+        self.time_penalty = 0
