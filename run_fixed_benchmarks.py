@@ -50,11 +50,24 @@ def parse_args():
         default=None,
         help="本次基准的版本标识（例如 old-summoning / mid-summoning）。不填则自动用 git 提交号。",
     )
+    parser.add_argument(
+        "--base-seed",
+        type=int,
+        default=20260220,
+        help="基准随机种子基数。每次运行种子=base_seed+scenario*1000+run。",
+    )
     return parser.parse_args()
 
 
-def run_once(python_exe, scenario_id):
-    cmd = [python_exe, "main.py", "--scenario", str(scenario_id)]
+def run_once(python_exe, scenario_id, seed):
+    cmd = [
+        python_exe,
+        "main.py",
+        "--scenario",
+        str(scenario_id),
+        "--seed",
+        str(seed),
+    ]
     completed = subprocess.run(cmd, capture_output=True, text=True)
     if completed.returncode != 0:
         raise RuntimeError(
@@ -103,7 +116,7 @@ def append_csv(csv_path, rows):
     with csv_file.open("a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["date", "batch_id", "scenario", "run", "F", "N", "D", "T"],
+            fieldnames=["date", "batch_id", "scenario", "run", "seed", "F", "N", "D", "T"],
         )
         if not file_exists:
             writer.writeheader()
@@ -167,12 +180,14 @@ def main():
 
     for scenario_id in args.scenarios:
         for run_idx in range(1, args.runs + 1):
-            metrics = run_once(args.python, scenario_id)
+            seed = args.base_seed + scenario_id * 1000 + run_idx
+            metrics = run_once(args.python, scenario_id, seed)
             row = {
                 "date": date_str,
                 "batch_id": batch_id,
                 "scenario": scenario_id,
                 "run": run_idx,
+                "seed": seed,
                 "F": metrics["F"],
                 "N": metrics["N"],
                 "D": metrics["D"],
@@ -181,7 +196,7 @@ def main():
             all_rows.append(row)
             print(
                 f"[OK] scenario={scenario_id} run={run_idx} -> "
-                f"F={metrics['F']:.2f}, N={metrics['N']}, D={metrics['D']}, T={metrics['T']:.2f}"
+                f"seed={seed} | F={metrics['F']:.2f}, N={metrics['N']}, D={metrics['D']}, T={metrics['T']:.2f}"
             )
 
     append_csv(args.csv, all_rows)

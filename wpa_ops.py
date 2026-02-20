@@ -53,7 +53,7 @@ class WPAOperators:
 
     def _decode_sequence_to_agvs(self, task_seq):
         """
-        将全局任务序列按载重约束解码回多AGV任务分配（中期版本解码器）
+        将全局任务序列按载重约束解码回多AGV任务分配（基础解码器）
         :param task_seq: list[Task]
         :return: list[AGV]，失败返回None
         """
@@ -88,6 +88,96 @@ class WPAOperators:
         if curr_agv.tasks:
             curr_agv.load = curr_load
             agv_list.append(curr_agv)
+
+        return agv_list
+
+    def _estimate_route_cost(self, tasks, start_pos):
+        """
+        估算一台AGV任务序列的路径代价（距离 + 时间窗违约惩罚）
+        :param tasks: list[Task]
+        :param start_pos: AGV起点
+        :return: float
+        """
+        if not tasks:
+            return 0.0
+
+        curr = start_pos
+        curr_time = 0
+        dist = 0
+        tardy = 0
+        for task in tasks:
+            step = manhattan_dist(curr, (task.x, task.y))
+            dist += step
+            curr_time += step + Config.SERVICE_TIME
+            tardy += max(0, curr_time - task.deadline)
+            curr = (task.x, task.y)
+
+        dist += manhattan_dist(curr, Config.DEPOT_NODE)
+        return dist + (Config.W3_TIME * tardy)
+
+    def _decode_sequence_to_agvs_cost_based(self, task_seq):
+        """
+        将全局任务序列解码回多AGV分配（增量代价最小插入）
+        思路：对每个任务，在所有可行AGV的所有插入位置中选增量代价最小者；
+             若无可行AGV则新开一台。
+        :param task_seq: list[Task]
+        :return: list[AGV]，失败返回None
+        """
+        if not task_seq:
+            return []
+
+        agv_list = []
+        next_id = 0
+        max_agv = len(Config.START_NODES)
+
+        for task in task_seq:
+            if task.weight > Config.AGV_CAPACITY:
+                return None
+
+            best_plan = None
+            # 在已有AGV中找最优插入点
+            for agv_idx, agv in enumerate(agv_list):
+                if agv.load + task.weight > Config.AGV_CAPACITY:
+                    continue
+                base_cost = self._estimate_route_cost(agv.tasks, agv.start_pos)
+                for pos in range(len(agv.tasks) + 1):
+                    new_tasks = agv.tasks[:pos] + [task] + agv.tasks[pos:]
+                    new_cost = self._estimate_route_cost(new_tasks, agv.start_pos)
+                    delta = new_cost - base_cost
+                    if (best_plan is None) or (delta < best_plan["delta"]):
+                        best_plan = {
+                            "mode": "insert",
+                            "agv_idx": agv_idx,
+                            "pos": pos,
+                            "delta": delta,
+                        }
+
+            # 新开AGV候选（如果还有泊位）
+            if next_id < max_agv:
+                new_start = Config.START_NODES[next_id]
+                new_cost = self._estimate_route_cost([task], new_start)
+                # 为了优先复用已有车辆，给开新车加一个小偏置
+                open_bias = Config.W2_NUM * 0.05
+                open_delta = new_cost + open_bias
+                if (best_plan is None) or (open_delta < best_plan["delta"]):
+                    best_plan = {
+                        "mode": "new",
+                        "delta": open_delta,
+                    }
+
+            if best_plan is None:
+                return None
+
+            if best_plan["mode"] == "insert":
+                target = agv_list[best_plan["agv_idx"]]
+                target.tasks.insert(best_plan["pos"], task)
+                target.load += task.weight
+            else:
+                new_agv = AGV(agv_id=next_id, start_pos=Config.START_NODES[next_id])
+                new_agv.tasks = [task]
+                new_agv.load = task.weight
+                agv_list.append(new_agv)
+                next_id += 1
 
         return agv_list
 
@@ -150,8 +240,8 @@ class WPAOperators:
 
         if not alpha_copy.agv_list or not new_wolf.agv_list:
             return wolf
-        # 保留执行概率，避免全部个体被召唤同化
-        if random.random() > 0.7:
+        # 降低召唤概率，减少过强扰动
+        if random.random() > 0.6:
             return wolf
 
         # -------------------------- 2. 构建父代序列 --------------------------
@@ -172,7 +262,8 @@ class WPAOperators:
         # -------------------------- 3. OX顺序交叉（头狼片段继承） --------------------------
         n = len(wolf_ids)
         seg_len_min = 2
-        seg_len_max = min(6, n)
+        # 缩短片段长度，降低召唤破坏性
+        seg_len_max = min(4, n)
         if seg_len_max < seg_len_min:
             return wolf
 
@@ -191,9 +282,9 @@ class WPAOperators:
                 child_ids[i] = fill_candidates[fill_idx]
                 fill_idx += 1
 
-        # -------------------------- 4. 解码回多AGV任务分配 --------------------------
+        # -------------------------- 4. 解码回多AGV任务分配（增量代价最小插入） --------------------------
         child_task_seq = [wolf_task_map[tid] for tid in child_ids]
-        decoded_agvs = self._decode_sequence_to_agvs(child_task_seq)
+        decoded_agvs = self._decode_sequence_to_agvs_cost_based(child_task_seq)
         if decoded_agvs is None:
             return wolf
         new_wolf.agv_list = decoded_agvs
@@ -202,10 +293,10 @@ class WPAOperators:
         new_wolf = self.evaluator.rebuild_wolf(new_wolf)
 
         # -------------------------- 6. 选择策略 --------------------------
-        # 召唤算子中期版本：允许等优接收，增强优质结构扩散
-        if new_wolf.fitness <= wolf.fitness:
+        # 改回严格改进接收，提升稳定性
+        if new_wolf.fitness < wolf.fitness:
             print(
-                f"  [召唤成功-中期] F值变化: {wolf.fitness:.1f} -> {new_wolf.fitness:.1f} "
+                f"  [召唤成功-增强] F值变化: {wolf.fitness:.1f} -> {new_wolf.fitness:.1f} "
                 f"(片段长度={seg_len})"
             )
             return new_wolf

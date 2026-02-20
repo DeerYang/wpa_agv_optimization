@@ -81,6 +81,12 @@ def parse_args():
         action="store_true",
         help="仅显示固定场景列表并退出。",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="随机种子。传入后可复现实验结果。",
+    )
     return parser.parse_args()
 
 
@@ -93,6 +99,11 @@ def main():
     if args.list_scenarios:
         list_scenarios()
         return
+
+    if args.seed is not None:
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        print(f"=== 0. 固定随机种子 seed={args.seed} ===")
 
     # ================ Step1: 仿真环境与任务构建 ================
     print("=== 1. 仓储环境与任务构建 ===")
