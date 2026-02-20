@@ -1,0 +1,28 @@
+﻿# IDE
+.idea/
+*.iml
+.vscode/
+
+# Python cache/bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build/artifacts
+build/
+dist/
+*.egg-info/
+
+# Thesis docs
+20225957计2201班杨宇鸿开题报告.docx
