@@ -5,14 +5,20 @@
 # 开题对应: 基于改进狼群算法的求解流程图，完整匹配技术路线
 # ======================================================
 
+# 引入命令行参数库，用于选择固定场景
+import argparse
 # 引入随机数库，用于任务随机生成
 import random
+# 引入数值计算库，用于构建固定场景地图
+import numpy as np
 # 引入全局配置类
 from config import Config
 # 引入任务实体类
 from models import Task
 # 引入工具函数：栅格地图生成
 from utils import generate_grid_map
+# 引入固定场景库
+from scenario_inputs import SCENARIO_LIBRARY
 # 引入种群初始化器
 from initializer import PopulationInitializer
 # 引入狼评估器
@@ -21,33 +27,115 @@ from evaluator import WolfEvaluator
 from wpa_ops import WPAOperators
 
 
+def list_scenarios():
+    """打印固定场景列表"""
+    print("可用固定输入场景：")
+    for idx, scenario in enumerate(SCENARIO_LIBRARY, start=1):
+        print(f"  {idx}. {scenario['name']} - {scenario['description']}")
+
+
+def load_scenario(scenario_index):
+    """
+    按编号加载固定场景
+    :param scenario_index: 场景编号（从1开始）
+    :return: (grid_map, task_list, scenario_name)
+    """
+    if scenario_index < 1 or scenario_index > len(SCENARIO_LIBRARY):
+        raise ValueError(f"场景编号无效: {scenario_index}")
+
+    scenario = SCENARIO_LIBRARY[scenario_index - 1]
+    grid_map = np.zeros((Config.MAP_WIDTH, Config.MAP_HEIGHT), dtype=int)
+
+    for x, y in scenario["obstacles"]:
+        if 0 <= x < Config.MAP_WIDTH and 0 <= y < Config.MAP_HEIGHT:
+            if x != 0 and (x, y) != Config.DEPOT_NODE:
+                grid_map[x][y] = 1
+
+    task_list = []
+    for i, item in enumerate(scenario["tasks"], start=1):
+        tx, ty = item["x"], item["y"]
+        if grid_map[tx][ty] == 1:
+            raise ValueError(f"场景[{scenario_index}]任务落在障碍物上: ({tx},{ty})")
+        task = Task(
+            i,
+            tx,
+            ty,
+            item["weight"],
+            item["deadline"],
+        )
+        task_list.append(task)
+
+    return grid_map, task_list, scenario["name"]
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="多AGV狼群算法调度仿真")
+    parser.add_argument(
+        "--scenario",
+        type=int,
+        default=None,
+        help="固定输入场景编号（从1开始）。不填则询问或走随机任务。",
+    )
+    parser.add_argument(
+        "--list-scenarios",
+        action="store_true",
+        help="仅显示固定场景列表并退出。",
+    )
+    return parser.parse_args()
+
+
 def main():
     """
     主程序入口函数
     功能: 完整执行多AGV调度仿真全流程，实现基于改进狼群算法的路径优化
     """
+    args = parse_args()
+    if args.list_scenarios:
+        list_scenarios()
+        return
+
     # ================ Step1: 仿真环境与任务构建 ================
     print("=== 1. 仓储环境与任务构建 ===")
-    # 生成带随机障碍物的20×20栅格地图
-    grid_map = generate_grid_map()
-    # 初始化全局任务列表
-    task_list = []
-    # 生成15个随机取货任务，可根据需求调整数量
-    task_num = 15
-    for i in range(task_num):
-        # 循环生成任务坐标，确保坐标在可通行区域，不在障碍物上
-        while True:
-            # 随机生成1~19的坐标，避开出发区(x=0)和地图边界
-            tx, ty = random.randint(1, 19), random.randint(1, 19)
-            # 校验坐标为可通行区域，跳出循环
-            if grid_map[tx][ty] == 0:
-                break
-        # 实例化任务对象：任务ID、坐标、重量(10~40kg)、截止时间(50~300秒)
-        t = Task(i + 1, tx, ty, random.randint(10, 40), random.randint(50, 300))
-        # 将任务加入全局任务列表
-        task_list.append(t)
-    # 打印任务生成结果
-    print(f"  > 成功生成 {len(task_list)} 个取货任务")
+    selected_scenario = args.scenario
+    if selected_scenario is None:
+        list_scenarios()
+        raw = input("请输入场景编号（直接回车使用随机输入）: ").strip()
+        if raw:
+            try:
+                selected_scenario = int(raw)
+            except ValueError:
+                selected_scenario = None
+                print("  > 场景编号解析失败，自动切换为随机输入模式。")
+
+    if selected_scenario is not None:
+        try:
+            grid_map, task_list, scenario_name = load_scenario(selected_scenario)
+            print(f"  > 使用固定场景 #{selected_scenario}: {scenario_name}")
+            print(f"  > 成功加载 {len(task_list)} 个固定任务")
+        except ValueError as e:
+            print(f"  > 固定场景加载失败：{e}")
+            return
+    else:
+        # 生成带随机障碍物的20×20栅格地图
+        grid_map = generate_grid_map()
+        # 初始化全局任务列表
+        task_list = []
+        # 生成15个随机取货任务，可根据需求调整数量
+        task_num = 15
+        for i in range(task_num):
+            # 循环生成任务坐标，确保坐标在可通行区域，不在障碍物上
+            while True:
+                # 随机生成1~19的坐标，避开出发区(x=0)和地图边界
+                tx, ty = random.randint(1, 19), random.randint(1, 19)
+                # 校验坐标为可通行区域，跳出循环
+                if grid_map[tx][ty] == 0:
+                    break
+            # 实例化任务对象：任务ID、坐标、重量(10~40kg)、截止时间(50~300秒)
+            t = Task(i + 1, tx, ty, random.randint(10, 40), random.randint(50, 300))
+            # 将任务加入全局任务列表
+            task_list.append(t)
+        # 打印任务生成结果
+        print(f"  > 成功生成 {len(task_list)} 个随机取货任务")
 
     # ================ Step2: 狼群种群初始化 ================
     print("\n=== 2. 狼群种群初始化 ===")
