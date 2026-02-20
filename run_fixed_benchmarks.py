@@ -15,7 +15,7 @@ FINAL_METRICS_PATTERN = re.compile(
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="自动运行固定场景基准（默认3个场景×每场景5次）并追加记录。"
+        description="自动运行固定场景基准（默认3个场景×每场景10次）并追加记录。"
     )
     parser.add_argument(
         "--scenarios",
@@ -27,8 +27,8 @@ def parse_args():
     parser.add_argument(
         "--runs",
         type=int,
-        default=5,
-        help="每个场景运行次数，默认5。",
+        default=10,
+        help="每个场景运行次数，默认10。",
     )
     parser.add_argument(
         "--python",
@@ -44,6 +44,11 @@ def parse_args():
         "--md",
         default="benchmark_fixed_inputs_summary.md",
         help="Markdown 结果文件路径，默认 benchmark_fixed_inputs_summary.md",
+    )
+    parser.add_argument(
+        "--tag",
+        default=None,
+        help="本次基准的版本标识（例如 old-summoning / mid-summoning）。不填则自动用 git 提交号。",
     )
     return parser.parse_args()
 
@@ -65,6 +70,31 @@ def run_once(python_exe, scenario_id):
         "D": int(match.group(3)),
         "T": float(match.group(4)),
     }
+
+
+def detect_git_tag():
+    """
+    自动生成版本标签：<short_commit>[-dirty]
+    非 git 环境时返回 unknown。
+    """
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        if dirty:
+            return f"{commit}-dirty"
+        return commit
+    except Exception:
+        return "unknown"
 
 
 def append_csv(csv_path, rows):
@@ -131,7 +161,8 @@ def main():
     args = parse_args()
     now = dt.datetime.now()
     date_str = now.strftime("%Y-%m-%d")
-    batch_id = now.strftime("%Y-%m-%d %H:%M:%S")
+    run_tag = args.tag.strip() if args.tag else detect_git_tag()
+    batch_id = f"{now.strftime('%Y-%m-%d %H:%M:%S')} [{run_tag}]"
     all_rows = []
 
     for scenario_id in args.scenarios:

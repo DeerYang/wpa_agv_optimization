@@ -40,6 +40,57 @@ class WPAOperators:
         # 存储狼评估器实例，全文件复用，保证评估逻辑全局一致
         self.evaluator = evaluator
 
+    def _flatten_tasks(self, wolf):
+        """
+        将狼个体展平成全局任务序列（按AGV顺序串联）
+        :param wolf: 狼个体
+        :return: list[Task]
+        """
+        seq = []
+        for agv in wolf.agv_list:
+            seq.extend(agv.tasks)
+        return seq
+
+    def _decode_sequence_to_agvs(self, task_seq):
+        """
+        将全局任务序列按载重约束解码回多AGV任务分配（中期版本解码器）
+        :param task_seq: list[Task]
+        :return: list[AGV]，失败返回None
+        """
+        if not task_seq:
+            return []
+
+        agv_list = []
+        agv_id = 0
+        curr_agv = AGV(agv_id=agv_id, start_pos=Config.START_NODES[agv_id])
+        curr_load = 0
+
+        for task in task_seq:
+            # 单任务超容量，当前配置下无法解码为可行解
+            if task.weight > Config.AGV_CAPACITY:
+                return None
+
+            # 超载时切换新AGV
+            if curr_load + task.weight > Config.AGV_CAPACITY:
+                if curr_agv.tasks:
+                    curr_agv.load = curr_load
+                    agv_list.append(curr_agv)
+                agv_id += 1
+                if agv_id >= len(Config.START_NODES):
+                    # 超出可用泊位数量，解码失败
+                    return None
+                curr_agv = AGV(agv_id=agv_id, start_pos=Config.START_NODES[agv_id])
+                curr_load = 0
+
+            curr_agv.tasks.append(task)
+            curr_load += task.weight
+
+        if curr_agv.tasks:
+            curr_agv.load = curr_load
+            agv_list.append(curr_agv)
+
+        return agv_list
+
     # ===================== 已实现：游走行为（Scouting）=====================
     def scouting(self, wolf):
         """
@@ -84,90 +135,81 @@ class WPAOperators:
     # ===================== 召唤行为（Summoning） =====================
     def summoning(self, wolf, alpha_wolf):
         """
-        狼群算法-召唤行为(Summoning)极简实现
-        功能: 模拟头狼召唤猛狼向最优解靠拢，提取头狼的任务运行方向，修改猛狼的任务执行顺序
-        核心设计: 同起点同终点AGV精准匹配，仅修改任务执行顺序，100%保留必过任务点，彻底解决任务不匹配问题
+        狼群算法-召唤行为(Summoning)中期实现
+        功能: 模拟头狼召唤猛狼向最优解靠拢，采用顺序交叉(OX)继承头狼片段基因
+        核心设计: 头狼片段继承 + 猛狼顺序补全 + 载重约束解码，强化信息共享质量
         冲突解决: 完全复用evaluator.rebuild_wolf()的时空预约表机制，自动规避路径冲突
-        开题对应: 召唤行为-路径交叉与信息共享章节
+        开题对应: 召唤行为-路径交叉与信息共享章节（中期版本）
         :param wolf: 执行召唤行为的猛狼个体（原个体）
         :param alpha_wolf: 当前种群的全局唯一头狼（最优解个体）
         :return: Wolf，召唤后的最优个体（原个体或变异后的更优个体）
         """
         # -------------------------- 1. 深拷贝与边界兜底校验 --------------------------
-        # 深拷贝原猛狼个体，避免修改原数据，保证变异失败可回退
         new_wolf = copy.deepcopy(wolf)
-        # 深拷贝头狼个体，避免修改全局最优头狼的原始数据
         alpha_copy = copy.deepcopy(alpha_wolf)
 
-        # 边界兜底1：如果头狼无任务/猛狼无任务，直接返回原个体，避免程序异常
         if not alpha_copy.agv_list or not new_wolf.agv_list:
             return wolf
-        # 边界兜底2：70%执行概率，30%直接跳过，保护种群多样性，防止早熟收敛
+        # 保留执行概率，避免全部个体被召唤同化
         if random.random() > 0.7:
             return wolf
 
-        # -------------------------- 2. 同起点同终点AGV精准匹配 --------------------------
-        # 核心设计：你的所有AGV终点统一为卸货区，同编号AGV起点固定，天然满足同起点同终点要求
-        # 随机选1辆头狼里有任务的AGV，作为优质基因来源
-        alpha_agv = random.choice([agv for agv in alpha_copy.agv_list if agv.tasks])
-        # 找到猛狼里同编号的AGV（同起点泊位），完成精准匹配
-        wolf_agv = next((agv for agv in new_wolf.agv_list if agv.id == alpha_agv.id), None)
-
-        # 边界兜底：如果猛狼里没有同编号AGV/该AGV无任务，直接返回原个体
-        if wolf_agv is None or not wolf_agv.tasks:
+        # -------------------------- 2. 构建父代序列 --------------------------
+        alpha_tasks = self._flatten_tasks(alpha_copy)
+        wolf_tasks = self._flatten_tasks(new_wolf)
+        if len(alpha_tasks) < 2 or len(wolf_tasks) < 2:
             return wolf
 
-        # -------------------------- 3. 提取头狼的任务运行方向规则 --------------------------
-        # 毕设初期极简实现：提取头狼AGV的核心排序规则（X坐标升序，即从左到右的运行方向）
-        # 可根据需求切换为：Y坐标排序、到起点的距离排序、到终点的距离排序
-        def alpha_sort_rule(task):
-            # 排序规则：按任务点X坐标升序（头狼的核心运行方向）
-            return task.x
+        # 以猛狼任务全集为基准，过滤头狼中可对齐的任务ID
+        wolf_task_map = {t.id: t for t in wolf_tasks}
+        wolf_ids = [t.id for t in wolf_tasks]
+        alpha_ids = [t.id for t in alpha_tasks if t.id in wolf_task_map]
 
-        # -------------------------- 4. 猛狼对齐头狼规则，修改任务执行顺序 --------------------------
-        # 核心优势：100%保留猛狼自身的必过任务点，仅修改执行顺序，彻底解决任务不匹配问题
-        # 提取猛狼AGV的所有必过任务，强制不修改、不增删、不遗漏
-        wolf_original_tasks = wolf_agv.tasks.copy()
-        # 用头狼的排序规则，重新排序猛狼的任务列表，完全复制头狼的运行方向
-        wolf_agv.tasks = sorted(wolf_original_tasks, key=alpha_sort_rule)
-        # 重新计算AGV当前载重，保证数据一致性
-        wolf_agv.load = sum([task.weight for task in wolf_agv.tasks])
+        if len(alpha_ids) != len(wolf_ids):
+            # 任务集合不一致时，召唤行为不执行，交给其它算子处理
+            return wolf
 
-        # -------------------------- 5. 载重硬约束兜底校验 --------------------------
-        # 复用你initializer.py里的贪婪分配逻辑，保证载重不超过AGV上限
-        if wolf_agv.load > Config.AGV_CAPACITY:
-            # 超载时，拆分后半段任务到新AGV
-            split_idx = len(wolf_agv.tasks) // 2
-            split_tasks = wolf_agv.tasks[split_idx:]
-            # 保留前半段任务在原AGV
-            wolf_agv.tasks = wolf_agv.tasks[:split_idx]
-            wolf_agv.load = sum([task.weight for task in wolf_agv.tasks])
+        # -------------------------- 3. OX顺序交叉（头狼片段继承） --------------------------
+        n = len(wolf_ids)
+        seg_len_min = 2
+        seg_len_max = min(6, n)
+        if seg_len_max < seg_len_min:
+            return wolf
 
-            # 生成新AGV，分配拆分的任务
-            new_agv_id = max([agv.id for agv in new_wolf.agv_list]) + 1
-            # 循环使用泊位，避免编号超出泊位数量
-            if new_agv_id >= len(Config.START_NODES):
-                new_agv_id = 0
-            # 实例化新AGV
-            new_agv = AGV(agv_id=new_agv_id, start_pos=Config.START_NODES[new_agv_id])
-            new_agv.tasks = split_tasks
-            new_agv.load = sum([task.weight for task in split_tasks])
-            # 将新AGV加入猛狼的AGV列表
-            new_wolf.agv_list.append(new_agv)
+        seg_len = random.randint(seg_len_min, seg_len_max)
+        alpha_start = random.randint(0, n - seg_len)
+        alpha_segment = alpha_ids[alpha_start: alpha_start + seg_len]
 
-        # -------------------------- 6. 自动解决时空冲突，重评估方案 --------------------------
-        # 核心设计：完全复用现有评估逻辑，自动初始化全新的时空预约表，规划无冲突路径，计算适应度
-        # 零额外代码解决路径冲突问题，保证全系统逻辑一致性
+        child_start = random.randint(0, n - seg_len)
+        child_ids = [None] * n
+        child_ids[child_start: child_start + seg_len] = alpha_segment
+
+        fill_candidates = [tid for tid in wolf_ids if tid not in alpha_segment]
+        fill_idx = 0
+        for i in range(n):
+            if child_ids[i] is None:
+                child_ids[i] = fill_candidates[fill_idx]
+                fill_idx += 1
+
+        # -------------------------- 4. 解码回多AGV任务分配 --------------------------
+        child_task_seq = [wolf_task_map[tid] for tid in child_ids]
+        decoded_agvs = self._decode_sequence_to_agvs(child_task_seq)
+        if decoded_agvs is None:
+            return wolf
+        new_wolf.agv_list = decoded_agvs
+
+        # -------------------------- 5. 自动解决时空冲突，重评估方案 --------------------------
         new_wolf = self.evaluator.rebuild_wolf(new_wolf)
 
-        # -------------------------- 7. 贪婪选择策略，保证迭代不退化 --------------------------
-        if new_wolf.fitness < wolf.fitness:
-            # 召唤成功，打印优化日志，便于调试
-            print(f"  [召唤成功] F值优化: {wolf.fitness:.1f} -> {new_wolf.fitness:.1f}")
+        # -------------------------- 6. 选择策略 --------------------------
+        # 召唤算子中期版本：允许等优接收，增强优质结构扩散
+        if new_wolf.fitness <= wolf.fitness:
+            print(
+                f"  [召唤成功-中期] F值变化: {wolf.fitness:.1f} -> {new_wolf.fitness:.1f} "
+                f"(片段长度={seg_len})"
+            )
             return new_wolf
-        else:
-            # 召唤失败，返回原个体，保证种群适应度不退化
-            return wolf
+        return wolf
 
     # ===================== 围攻行为（Besieging） =====================
     # -------------------------- 辅助工具函数：Levy飞行步长生成 --------------------------
