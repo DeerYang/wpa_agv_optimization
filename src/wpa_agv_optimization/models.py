@@ -72,3 +72,6 @@ class Wolf:
         self.total_dist = 0
         # 该方案中所有任务违反时间窗的总惩罚T，单位：秒，为优化目标之一
         self.time_penalty = 0
+        self.conflict_count = 0
+        self.deadlock_count = 0
+        self.replan_count = 0

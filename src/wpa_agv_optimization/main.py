@@ -253,6 +253,10 @@ def main():
     print(f"    使用AGV车辆数N={global_best_wolf.vehicle_num}")
     print(f"    系统总行驶距离D={global_best_wolf.total_dist} 格")
     print(f"    时间窗总惩罚T={global_best_wolf.time_penalty} 秒")
+    print("  冲突/死锁统计：")
+    print(f"    冲突处理次数={getattr(global_best_wolf, 'conflict_count', 0)}")
+    print(f"    死锁解锁次数={getattr(global_best_wolf, 'deadlock_count', 0)}")
+    print(f"    重规划触发次数={getattr(global_best_wolf, 'replan_count', 0)}")
     print(f"  方案详情：")
     for idx, agv in enumerate(global_best_wolf.agv_list):
         print(f"    AGV-{agv.id}：任务数={len(agv.tasks)} | 最终载重={agv.load}kg | 完成时间={agv.finish_time}秒")
