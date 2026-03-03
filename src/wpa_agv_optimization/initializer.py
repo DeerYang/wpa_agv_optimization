@@ -9,13 +9,13 @@
 # 引入随机数库，用于混沌序列初始值生成
 import random
 # 引入全局配置类
-from config import Config
+from .config import Config
 # 引入狼实体类、AGV实体类
-from models import Wolf, AGV
+from .models import Wolf, AGV
 # 引入工具函数：Tent混沌映射生成、曼哈顿距离计算
-from utils import tent_map_generate, manhattan_dist
+from .utils import tent_map_generate, manhattan_dist
 # 引入狼评估器，复用路径规划与评估逻辑
-from evaluator import WolfEvaluator
+from .evaluator import WolfEvaluator
 
 
 class PopulationInitializer:

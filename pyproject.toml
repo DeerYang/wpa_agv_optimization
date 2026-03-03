@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wpa-agv-optimization"
+version = "0.1.0"
+description = "WPA-based AGV scheduling optimization project"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "scipy>=1.10",
+]
+
+[project.scripts]
+wpa-agv = "wpa_agv_optimization.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wpa_agv_optimization"]

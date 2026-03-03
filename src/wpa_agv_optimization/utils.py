@@ -10,7 +10,7 @@ import numpy as np
 # 引入随机数库，用于障碍物随机生成
 import random
 # 引入全局配置类，保证参数全局一致性
-from config import Config
+from .config import Config
 
 
 def tent_map_generate(n, x0=0.4):

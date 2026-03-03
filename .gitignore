@@ -25,4 +25,6 @@ dist/
 *.egg-info/
 
 # Thesis docs
-20225957计2201班杨宇鸿开题报告.docx
+*.docx
+*.pdf
+周汇报.md

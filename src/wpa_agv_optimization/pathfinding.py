@@ -9,7 +9,7 @@
 # 引入随机数库，用于混沌序列兜底与随机探索
 import random
 # 引入全局配置类
-from config import Config
+from .config import Config
 
 
 class TentDFSPlanner:

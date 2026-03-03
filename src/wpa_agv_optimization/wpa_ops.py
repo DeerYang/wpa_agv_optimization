@@ -15,11 +15,11 @@ import numpy as np
 # 引入伽马函数，用于Levy分布参数计算
 from scipy.special import gamma
 # 引入全局配置类
-from config import Config
+from .config import Config
 # 引入AGV实体类，用于新AGV实例化
-from models import AGV
+from .models import AGV
 # 引入曼哈顿距离工具函数，复用现有逻辑
-from utils import manhattan_dist
+from .utils import manhattan_dist
 
 
 class WPAOperators:

@@ -12,8 +12,8 @@
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
 
-from config import Config
-from utils import manhattan_dist
+from .config import Config
+from .utils import manhattan_dist
 
 
 Node = Tuple[int, int]

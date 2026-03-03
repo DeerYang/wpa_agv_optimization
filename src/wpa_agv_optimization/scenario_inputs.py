@@ -4,7 +4,7 @@
 # 设计原则: 场景数据与算法逻辑解耦，统一从此文件读取输入，避免随机输入导致实验不可比
 # ======================================================
 
-from config import Config
+from .config import Config
 
 
 def _base_obstacles():
@@ -101,4 +101,3 @@ SCENARIO_LIBRARY = [
         ],
     },
 ]
-

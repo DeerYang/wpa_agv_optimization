@@ -7,13 +7,13 @@
 # ======================================================
 
 # 引入全局配置类
-from config import Config
+from .config import Config
 # 引入狼实体类
-from models import Wolf
+from .models import Wolf
 # 引入Tent-DFS路径规划器
-from pathfinding import TentDFSPlanner
+from .pathfinding import TentDFSPlanner
 # 引入工具函数：栅格地图生成、曼哈顿距离计算
-from utils import tent_map_generate, manhattan_dist
+from .utils import tent_map_generate, manhattan_dist
 # 引入随机数库，用于混沌序列初始值生成
 import random
 
