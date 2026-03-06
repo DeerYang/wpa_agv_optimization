@@ -1,3 +1,12 @@
+"""
+固定场景基准批量运行脚本。
+
+作用：
+- 自动运行多个固定场景和多次重复实验。
+- 从主程序输出中解析 F/N/D/T。
+- 结果追加写入 CSV 与 Markdown。
+"""
+
 import argparse
 import csv
 import datetime as dt
@@ -7,6 +16,7 @@ import sys
 from pathlib import Path
 
 
+# 从 main 输出中提取最终指标的正则。
 FINAL_METRICS_PATTERN = re.compile(
     r"=== 4\.[\s\S]*?F=([0-9.]+)[\s\S]*?N=([0-9]+)[\s\S]*?D=([0-9]+)[\s\S]*?T=([0-9.]+)",
     re.MULTILINE,
@@ -14,15 +24,16 @@ FINAL_METRICS_PATTERN = re.compile(
 
 
 def parse_args():
+    """解析命令行参数。"""
     parser = argparse.ArgumentParser(
-        description="自动运行固定场景基准（默认3个场景×每场景10次）并追加记录。"
+        description="自动运行固定场景基准（默认3个场景，每场景10次）并追加记录。"
     )
     parser.add_argument(
         "--scenarios",
         type=int,
         nargs="+",
         default=[1, 2, 3],
-        help="要运行的场景编号列表，例如: --scenarios 1 2 3",
+        help="要运行的场景编号列表，例如：--scenarios 1 2 3",
     )
     parser.add_argument(
         "--runs",
@@ -33,41 +44,35 @@ def parse_args():
     parser.add_argument(
         "--python",
         default=sys.executable,
-        help="用于执行 main.py 的 Python 可执行文件路径，默认当前解释器。",
+        help="用于执行 main.py 的 Python 解释器路径。",
     )
     parser.add_argument(
         "--csv",
         default="benchmark_fixed_inputs_runs.csv",
-        help="CSV 结果文件路径，默认 benchmark_fixed_inputs_runs.csv",
+        help="CSV 结果文件路径。",
     )
     parser.add_argument(
         "--md",
         default="benchmark_fixed_inputs_summary.md",
-        help="Markdown 结果文件路径，默认 benchmark_fixed_inputs_summary.md",
+        help="Markdown 结果文件路径。",
     )
     parser.add_argument(
         "--tag",
         default=None,
-        help="本次基准的版本标识（例如 old-summoning / mid-summoning）。不填则自动用 git 提交号。",
+        help="本批次标签。不填则自动读取 git 提交号。",
     )
     parser.add_argument(
         "--base-seed",
         type=int,
         default=20260220,
-        help="基准随机种子基数。每次运行种子=base_seed+scenario*1000+run。",
+        help="基础种子。实际种子=base_seed+scenario*1000+run。",
     )
     return parser.parse_args()
 
 
 def run_once(python_exe, scenario_id, seed):
-    cmd = [
-        python_exe,
-        "main.py",
-        "--scenario",
-        str(scenario_id),
-        "--seed",
-        str(seed),
-    ]
+    """运行一次主程序并解析 F/N/D/T。"""
+    cmd = [python_exe, "main.py", "--scenario", str(scenario_id), "--seed", str(seed)]
     completed = subprocess.run(cmd, capture_output=True, text=True)
     if completed.returncode != 0:
         raise RuntimeError(
@@ -86,10 +91,7 @@ def run_once(python_exe, scenario_id, seed):
 
 
 def detect_git_tag():
-    """
-    自动生成版本标签：<short_commit>[-dirty]
-    非 git 环境时返回 unknown。
-    """
+    """自动生成版本标签：<short_commit>[-dirty]。"""
     try:
         commit = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -111,6 +113,7 @@ def detect_git_tag():
 
 
 def append_csv(csv_path, rows):
+    """将原始运行行追加到 CSV。"""
     csv_file = Path(csv_path)
     file_exists = csv_file.exists()
     with csv_file.open("a", newline="", encoding="utf-8") as f:
@@ -125,10 +128,12 @@ def append_csv(csv_path, rows):
 
 
 def summarize_by_scenario(rows):
+    """按场景聚合统计均值/最值。"""
     groups = {}
     for row in rows:
         sid = row["scenario"]
         groups.setdefault(sid, []).append(row)
+
     summary = []
     for sid in sorted(groups.keys()):
         g = groups[sid]
@@ -150,6 +155,7 @@ def summarize_by_scenario(rows):
 
 
 def append_markdown(md_path, batch_id, rows, summary):
+    """将原始表与汇总表追加到 Markdown 报告。"""
     md_file = Path(md_path)
     with md_file.open("a", encoding="utf-8") as f:
         f.write(f"\n\n## Batch {batch_id}\n")
@@ -171,6 +177,7 @@ def append_markdown(md_path, batch_id, rows, summary):
 
 
 def main():
+    """批量运行入口。"""
     args = parse_args()
     now = dt.datetime.now()
     date_str = now.strftime("%Y-%m-%d")
@@ -216,3 +223,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

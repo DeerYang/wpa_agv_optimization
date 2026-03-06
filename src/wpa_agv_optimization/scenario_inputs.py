@@ -1,16 +1,26 @@
-# ===================== 文件级说明 =====================
-# 文件名: scenario_inputs.py
-# 功能: 固定基准场景输入库，用于不同算法实现之间的可复现实验对比
-# 设计原则: 场景数据与算法逻辑解耦，统一从此文件读取输入，避免随机输入导致实验不可比
-# ======================================================
+"""
+固定场景输入库。
+
+用途：
+- 让不同算法版本在同一组输入上比较，保证实验可复现。
+- 避免仅靠随机输入导致结果不可对比。
+"""
 
 from .config import Config
 
 
 def _base_obstacles():
-    """构建基础障碍物布局（走廊+货架）"""
+    """
+    构建基础障碍布局。
+
+    设计意图：
+    - 通过竖向与横向障碍制造通道与瓶颈。
+    - 保留若干走廊，避免地图完全不可达。
+    """
+    # 使用集合去重，避免重复坐标。
     obstacles = set()
 
+    # 竖向障碍列。
     for y in range(1, Config.MAP_HEIGHT - 1):
         if y not in (3, 9, 15):
             obstacles.add((5, y))
@@ -19,20 +29,19 @@ def _base_obstacles():
         if y not in (4, 10, 16):
             obstacles.add((14, y))
 
+    # 横向障碍行。
     for x in range(2, Config.MAP_WIDTH - 2):
         if x not in (5, 10, 14):
             obstacles.add((x, 7))
             obstacles.add((x, 13))
 
-    # 保护出发列和卸货点
-    obstacles = {
-        (x, y)
-        for (x, y) in obstacles
-        if x != 0 and (x, y) != Config.DEPOT_NODE
-    }
+    # 安全过滤：起始列与卸货点不允许是障碍。
+    obstacles = {(x, y) for (x, y) in obstacles if x != 0 and (x, y) != Config.DEPOT_NODE}
+    # 转为有序列表，便于输出稳定。
     return sorted(obstacles)
 
 
+# 固定场景库：每个元素是一个完整场景定义。
 SCENARIO_LIBRARY = [
     {
         "name": "场景1-中等任务密度",
@@ -101,3 +110,4 @@ SCENARIO_LIBRARY = [
         ],
     },
 ]
+

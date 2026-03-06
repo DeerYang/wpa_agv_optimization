@@ -1,149 +1,187 @@
-# ===================== 文件级说明 =====================
-# 文件名: wpa_ops.py
-# 功能: 狼群算法三大核心智能行为算子实现，完全对齐开题报告的算法设计
-# 已实现: 游走(Scouting)、召唤(Summoning)、围攻(Besieging)
-# 设计原则: 毕设初期极简优先，100%复用现有evaluator逻辑，零底层代码改动
-# 开题对应: 狼群算法智能行为离散化适配章节，含游走-邻域搜索、召唤-路径交叉、围攻-Levy扰动
-# ======================================================
+"""
+WPA 算子模块（游走/召唤/围攻）。
 
-# 引入随机数库，用于随机选择与变异
-import random
-# 引入深拷贝工具，保证原个体不被修改，变异失败可回退
+阅读建议：
+1) 先看 scouting：最简单的邻域扰动。
+2) 再看 summoning：当前版本提升最大的算子。
+3) 最后看 besieging：Levy 步长驱动的混合搜索。
+"""
+
 import copy
-# 引入数值计算库，用于Levy飞行步长生成
+import random
+
 import numpy as np
-# 引入伽马函数，用于Levy分布参数计算
 from scipy.special import gamma
-# 引入全局配置类
+
+# 全局参数。
 from .config import Config
-# 引入AGV实体类，用于新AGV实例化
+# AGV 数据结构（解码时会创建新 AGV）。
 from .models import AGV
-# 引入曼哈顿距离工具函数，复用现有逻辑
+# 估算代价时需要曼哈顿距离。
 from .utils import manhattan_dist
 
 
 class WPAOperators:
-    """
-    狼群算法算子集合类
-    职责: 实现狼群算法三大核心智能行为，严格遵循标准狼群算法分工边界
-    行为分工:
-        1. 游走(Scouting): 探狼执行，全局广域勘探，寻找潜在更优解区域
-        2. 召唤(Summoning): 猛狼执行，向头狼靠拢，实现优质基因信息共享，加速收敛
-        3. 围攻(Besieging): 全种群执行，Levy飞行自适应扰动，局部精细优化+防早熟收敛
-    设计说明: 所有算子均采用"深拷贝-变异-重评估-贪婪选择"标准流程，保证原个体不被污染
-    """
+    """WPA 三算子集合。"""
+
     def __init__(self, evaluator):
-        """
-        算子类初始化方法
-        :param evaluator: WolfEvaluator实例，复用路径规划、冲突规避、适应度评估逻辑
-        """
-        # 存储狼评估器实例，全文件复用，保证评估逻辑全局一致
+        # evaluator 负责“把任务序列变成可行路径并打分”；
+        # 本类负责“如何扰动任务序列以产生候选新解”。
+        # evaluator 负责重建路径与评分，算子只负责“怎么变”。
         self.evaluator = evaluator
 
     def _flatten_tasks(self, wolf):
+        # 把多车任务展开为全局线性序列，便于执行交叉、迁移、插入等序列算子。
         """
-        将狼个体展平成全局任务序列（按AGV顺序串联）
-        :param wolf: 狼个体
-        :return: list[Task]
+        将多 AGV 任务队列展平为全局序列。
         """
+        # 初始化空序列。
         seq = []
+        # 按 AGV 顺序拼接每台车的任务。
         for agv in wolf.agv_list:
             seq.extend(agv.tasks)
+        # 返回展平结果。
         return seq
 
     def _decode_sequence_to_agvs(self, task_seq):
+        # 基础解码：按容量阈值切分，不做复杂代价优化。
         """
-        将全局任务序列按载重约束解码回多AGV任务分配（基础解码器）
-        :param task_seq: list[Task]
-        :return: list[AGV]，失败返回None
+        基础解码器：仅按载重约束切分任务序列。
+
+        该函数是“简单版解码”，当前主要保留作参考与兜底。
         """
+        # 空序列直接返回空 AGV 列表。
         if not task_seq:
             return []
 
+        # 解码结果容器。
         agv_list = []
+        # 当前 AGV 编号从 0 开始。
         agv_id = 0
+        # 创建当前 AGV。
         curr_agv = AGV(agv_id=agv_id, start_pos=Config.START_NODES[agv_id])
+        # 当前 AGV 已分配载重。
         curr_load = 0
 
+        # 逐任务扫描并分配。
         for task in task_seq:
-            # 单任务超容量，当前配置下无法解码为可行解
+            # 若单任务超过最大载重，无法解码。
             if task.weight > Config.AGV_CAPACITY:
                 return None
 
-            # 超载时切换新AGV
+            # 若继续放入会超载，则收尾当前 AGV 并新开一台。
             if curr_load + task.weight > Config.AGV_CAPACITY:
                 if curr_agv.tasks:
                     curr_agv.load = curr_load
                     agv_list.append(curr_agv)
                 agv_id += 1
                 if agv_id >= len(Config.START_NODES):
-                    # 超出可用泊位数量，解码失败
                     return None
                 curr_agv = AGV(agv_id=agv_id, start_pos=Config.START_NODES[agv_id])
                 curr_load = 0
 
+            # 放入当前任务。
             curr_agv.tasks.append(task)
+            # 更新载重。
             curr_load += task.weight
 
+        # 循环结束后收尾最后一台 AGV。
         if curr_agv.tasks:
             curr_agv.load = curr_load
             agv_list.append(curr_agv)
 
+        # 返回解码结果。
         return agv_list
 
     def _estimate_route_cost(self, tasks, start_pos):
+        # 该代价函数只用于“算子内部快速比较插入位置优劣”，
+        # 最终真实优劣仍以 evaluator.rebuild_wolf 的全流程评分为准。
         """
-        估算一台AGV任务序列的路径代价（距离 + 时间窗违约惩罚）
-        :param tasks: list[Task]
-        :param start_pos: AGV起点
-        :return: float
+        估算单车执行任务序列的代价。
+
+        代价组成：
+        - 总距离
+        - 超时惩罚（乘以 W3_TIME）
         """
+        # 无任务代价为 0。
         if not tasks:
             return 0.0
 
+        # 当前坐标初始化为起点。
         curr = start_pos
+        # 当前时间初始化为 0。
         curr_time = 0
+        # 距离累计。
         dist = 0
+        # 超时累计。
         tardy = 0
+
+        # 按任务顺序估算执行成本。
         for task in tasks:
+            # 计算去往任务点的距离。
             step = manhattan_dist(curr, (task.x, task.y))
             dist += step
+            # 时间推进：路程时间 + 服务时间。
             curr_time += step + Config.SERVICE_TIME
+            # 累计该任务超时量。
             tardy += max(0, curr_time - task.deadline)
+            # 更新当前位置。
             curr = (task.x, task.y)
 
+        # 加上最后回卸货点的距离。
         dist += manhattan_dist(curr, Config.DEPOT_NODE)
+        # 返回总代价。
         return dist + (Config.W3_TIME * tardy)
 
     def _decode_sequence_to_agvs_cost_based(self, task_seq):
+        # 成本导向解码（当前召唤算子核心）：
+        # - 对每个任务尝试所有可行插入位；
+        # - 以最小增量代价策略决定插入点；
+        # - 若插不进任何现有车辆，再尝试开新车。
         """
-        将全局任务序列解码回多AGV分配（增量代价最小插入）
-        思路：对每个任务，在所有可行AGV的所有插入位置中选增量代价最小者；
-             若无可行AGV则新开一台。
-        :param task_seq: list[Task]
-        :return: list[AGV]，失败返回None
+        增量代价最小插入解码器（召唤算子主力解码器）。
+
+        处理策略：
+        - 对每个任务，尝试插入每台可行 AGV 的每个位置。
+        - 选取代价增量最小的插入方案。
+        - 若都不可行，再尝试新开 AGV。
         """
+        # 空序列返回空结果。
         if not task_seq:
             return []
 
+        # 已创建 AGV 列表。
         agv_list = []
+        # 下一个可用 AGV 编号。
         next_id = 0
+        # 最大可用 AGV 数量由起始泊位数决定。
         max_agv = len(Config.START_NODES)
 
+        # 逐任务做增量插入。
         for task in task_seq:
+            # 单任务超载直接失败。
             if task.weight > Config.AGV_CAPACITY:
                 return None
 
+            # 记录当前最优方案（insert/new）。
             best_plan = None
-            # 在已有AGV中找最优插入点
+
+            # ---------- 方案A：插入现有 AGV ----------
             for agv_idx, agv in enumerate(agv_list):
+                # 当前车容量不够，跳过。
                 if agv.load + task.weight > Config.AGV_CAPACITY:
                     continue
+                # 计算插入前基准代价。
                 base_cost = self._estimate_route_cost(agv.tasks, agv.start_pos)
+                # 遍历所有可插入位置（含头尾）。
                 for pos in range(len(agv.tasks) + 1):
+                    # 构造插入后的任务序列。
                     new_tasks = agv.tasks[:pos] + [task] + agv.tasks[pos:]
+                    # 计算插入后代价。
                     new_cost = self._estimate_route_cost(new_tasks, agv.start_pos)
+                    # 计算增量。
                     delta = new_cost - base_cost
+                    # 更新最优方案。
                     if (best_plan is None) or (delta < best_plan["delta"]):
                         best_plan = {
                             "mode": "insert",
@@ -152,22 +190,24 @@ class WPAOperators:
                             "delta": delta,
                         }
 
-            # 新开AGV候选（如果还有泊位）
+            # ---------- 方案B：新开 AGV ----------
             if next_id < max_agv:
+                # 新车起点。
                 new_start = Config.START_NODES[next_id]
+                # 新车只执行该任务的代价。
                 new_cost = self._estimate_route_cost([task], new_start)
-                # 为了优先复用已有车辆，给开新车加一个小偏置
+                # 给开新车加轻微偏置，鼓励优先复用已有车辆。
                 open_bias = Config.W2_NUM * 0.05
                 open_delta = new_cost + open_bias
+                # 与当前最优比较。
                 if (best_plan is None) or (open_delta < best_plan["delta"]):
-                    best_plan = {
-                        "mode": "new",
-                        "delta": open_delta,
-                    }
+                    best_plan = {"mode": "new", "delta": open_delta}
 
+            # 两种方案都不可行则失败。
             if best_plan is None:
                 return None
 
+            # 应用最优方案。
             if best_plan["mode"] == "insert":
                 target = agv_list[best_plan["agv_idx"]]
                 target.tasks.insert(best_plan["pos"], task)
@@ -179,102 +219,98 @@ class WPAOperators:
                 agv_list.append(new_agv)
                 next_id += 1
 
+        # 返回增量解码结果。
         return agv_list
 
-    # ===================== 已实现：游走行为（Scouting）=====================
     def scouting(self, wolf):
+        # 游走：轻量局部扰动，探索邻域解，扰动幅度小、风险低。
         """
-        狼群算法-游走行为(Scouting)实现
-        功能: 模拟探狼的邻域探索行为，对当前方案进行微小变异，寻找更优的邻域解
-        变异策略: 随机选择一辆有多个任务的AGV，交换其内部两个任务的执行顺序，实现邻域搜索
-        开题对应: 游走行为-邻域路径探索章节
-        :param wolf: 执行游走行为的原狼个体
-        :return: Wolf，游走后的最优个体（原个体或变异后的更优个体）
+        游走算子：随机选一台任务数>=2的车，交换两个任务顺序。
         """
-        # 1. 深拷贝原狼个体，避免修改原个体数据，保证变异失败时可回退
+        # 深拷贝，避免原个体被污染。
         new_wolf = copy.deepcopy(wolf)
-
-        # 2. 筛选出有至少2个任务的AGV，只有多个任务才能交换执行顺序
+        # 只挑可交换任务顺序的 AGV。
         active_agvs = [agv for agv in new_wolf.agv_list if len(agv.tasks) >= 2]
-        # 边界兜底：如果没有符合条件的AGV，无法执行游走变异，直接返回原个体
+        # 若没有可操作 AGV，返回原个体。
         if not active_agvs:
             return wolf
 
-        # 3. 随机选择一辆目标AGV执行变异
+        # 随机选目标车。
         target_agv = random.choice(active_agvs)
-
-        # 4. 执行任务交换变异（邻域游走核心逻辑）
-        # 随机选择两个不同的任务索引，保证交换的是不同任务
+        # 随机抽两个任务索引。
         idx1, idx2 = random.sample(range(len(target_agv.tasks)), 2)
-        # 交换两个任务的执行顺序，完成邻域变异，100%保留原有任务不修改
+        # 执行交换。
         target_agv.tasks[idx1], target_agv.tasks[idx2] = target_agv.tasks[idx2], target_agv.tasks[idx1]
 
-        # 5. 重新规划路径并计算适应度
-        # 任务顺序改变后，必须重新规划路径、检测冲突、计算适应度，完全复用现有评估逻辑
+        # 重建并重评估。
         new_wolf = self.evaluator.rebuild_wolf(new_wolf)
 
-        # 6. 贪婪选择策略：仅当变异后的方案更优时，才返回新个体；否则返回原个体
+        # 贪婪接受：只有更优才保留新个体。
         if new_wolf.fitness < wolf.fitness:
-            # 变异成功，打印优化日志，便于调试与迭代监控
             print(f"  [游走成功] F值优化: {wolf.fitness:.1f} -> {new_wolf.fitness:.1f}")
             return new_wolf
-        else:
-            # 变异失败，返回原个体，保证种群适应度不退化
-            return wolf
+        return wolf
 
-    # ===================== 召唤行为（Summoning） =====================
     def summoning(self, wolf, alpha_wolf):
+        # 召唤：利用头狼结构信息（片段继承）指导个体向更优结构靠近。
+        # 当前版本采用 OX 片段继承 + 成本导向解码，是召唤算子的主提升点。
         """
-        狼群算法-召唤行为(Summoning)中期实现
-        功能: 模拟头狼召唤猛狼向最优解靠拢，采用顺序交叉(OX)继承头狼片段基因
-        核心设计: 头狼片段继承 + 猛狼顺序补全 + 载重约束解码，强化信息共享质量
-        冲突解决: 完全复用evaluator.rebuild_wolf()的时空预约表机制，自动规避路径冲突
-        开题对应: 召唤行为-路径交叉与信息共享章节（中期版本）
-        :param wolf: 执行召唤行为的猛狼个体（原个体）
-        :param alpha_wolf: 当前种群的全局唯一头狼（最优解个体）
-        :return: Wolf，召唤后的最优个体（原个体或变异后的更优个体）
+        召唤算子（当前增强版）。
+
+        核心流程：
+        1) 以 OX 思想继承头狼片段。
+        2) 用猛狼顺序补全剩余任务。
+        3) 用增量代价解码器还原为多 AGV 方案。
+        4) 重评估后仅在更优时接受。
         """
-        # -------------------------- 1. 深拷贝与边界兜底校验 --------------------------
+        # 深拷贝父代个体。
         new_wolf = copy.deepcopy(wolf)
         alpha_copy = copy.deepcopy(alpha_wolf)
 
+        # 基础边界检查。
         if not alpha_copy.agv_list or not new_wolf.agv_list:
             return wolf
-        # 降低召唤概率，减少过强扰动
+        # 召唤不是每次都触发，保留一定随机探索空间。
         if random.random() > 0.6:
             return wolf
 
-        # -------------------------- 2. 构建父代序列 --------------------------
+        # 拉平任务序列。
         alpha_tasks = self._flatten_tasks(alpha_copy)
         wolf_tasks = self._flatten_tasks(new_wolf)
         if len(alpha_tasks) < 2 or len(wolf_tasks) < 2:
             return wolf
 
-        # 以猛狼任务全集为基准，过滤头狼中可对齐的任务ID
+        # 以猛狼任务集合为基准，构造 ID 映射。
         wolf_task_map = {t.id: t for t in wolf_tasks}
         wolf_ids = [t.id for t in wolf_tasks]
         alpha_ids = [t.id for t in alpha_tasks if t.id in wolf_task_map]
 
+        # 若任务集合不一致则不执行召唤。
         if len(alpha_ids) != len(wolf_ids):
-            # 任务集合不一致时，召唤行为不执行，交给其它算子处理
             return wolf
 
-        # -------------------------- 3. OX顺序交叉（头狼片段继承） --------------------------
+        # ---------- OX 片段继承 ----------
         n = len(wolf_ids)
         seg_len_min = 2
-        # 缩短片段长度，降低召唤破坏性
         seg_len_max = min(4, n)
         if seg_len_max < seg_len_min:
             return wolf
 
+        # 随机片段长度。
         seg_len = random.randint(seg_len_min, seg_len_max)
+        # 头狼片段起点。
         alpha_start = random.randint(0, n - seg_len)
+        # 截取头狼片段。
         alpha_segment = alpha_ids[alpha_start: alpha_start + seg_len]
-
+        # 子序列插入起点。
         child_start = random.randint(0, n - seg_len)
+
+        # 子代 ID 序列初始化为 None。
         child_ids = [None] * n
+        # 放入头狼片段。
         child_ids[child_start: child_start + seg_len] = alpha_segment
 
+        # 其余位置按猛狼原顺序补齐。
         fill_candidates = [tid for tid in wolf_ids if tid not in alpha_segment]
         fill_idx = 0
         for i in range(n):
@@ -282,18 +318,19 @@ class WPAOperators:
                 child_ids[i] = fill_candidates[fill_idx]
                 fill_idx += 1
 
-        # -------------------------- 4. 解码回多AGV任务分配（增量代价最小插入） --------------------------
+        # ---------- 解码与评估 ----------
+        # 把 ID 序列还原为 Task 序列。
         child_task_seq = [wolf_task_map[tid] for tid in child_ids]
+        # 用增量代价解码器解码。
         decoded_agvs = self._decode_sequence_to_agvs_cost_based(child_task_seq)
         if decoded_agvs is None:
             return wolf
+        # 写回新个体 AGV 列表。
         new_wolf.agv_list = decoded_agvs
-
-        # -------------------------- 5. 自动解决时空冲突，重评估方案 --------------------------
+        # 重建路径并评估。
         new_wolf = self.evaluator.rebuild_wolf(new_wolf)
 
-        # -------------------------- 6. 选择策略 --------------------------
-        # 改回严格改进接收，提升稳定性
+        # 严格改进才接受。
         if new_wolf.fitness < wolf.fitness:
             print(
                 f"  [召唤成功-增强] F值变化: {wolf.fitness:.1f} -> {new_wolf.fitness:.1f} "
@@ -302,117 +339,95 @@ class WPAOperators:
             return new_wolf
         return wolf
 
-    # ===================== 围攻行为（Besieging） =====================
-    # -------------------------- 辅助工具函数：Levy飞行步长生成 --------------------------
     def _levy_flight_step(self, beta=1.5, step_scale=1.0):
+        # Levy 步长用于生成“多数小步、少数大步”的搜索行为分布。
         """
-        Mantegna算法生成服从Levy分布的随机步长
-        核心特性：大部分短步长、极小概率长步长，完美匹配开题要求的长短步相间特性
-        开题对应: 围攻行为-Levy飞行扰动跳出局部最优章节
-        :param beta: Levy分布的幂律指数，1<beta<2，默认1.5（学术通用标准值）
-        :param step_scale: 步长缩放系数，控制整体扰动范围
-        :return: 服从Levy分布的绝对值步长
+        生成 Levy 步长（Mantegna 方法）。
         """
-        # 计算Levy分布的sigma参数，Mantegna算法标准公式
+        # 计算 sigma 分子项。
         sigma_num = gamma(1 + beta) * np.sin(np.pi * beta / 2)
+        # 计算 sigma 分母项。
         sigma_den = gamma((1 + beta) / 2) * beta * np.power(2, (beta - 1) / 2)
+        # 计算 sigma。
         sigma = np.power(sigma_num / sigma_den, 1 / beta)
-
-        # 生成两个正态分布随机数，用于计算Levy步长
+        # 采样 u。
         u = np.random.normal(0, sigma, 1)
+        # 采样 v。
         v = np.random.normal(0, 1, 1)
-
-        # Mantegna算法核心公式，计算Levy步长
+        # 计算 step。
         step = step_scale * u / np.power(np.abs(v), 1 / beta)
-        # 返回绝对值步长，用于扰动范围判断
+        # 取绝对值做无方向步长。
         return abs(step[0])
 
-    # -------------------------- 围攻行为主方法 --------------------------
     def besieging(self, wolf, curr_iter, max_iter):
+        # 围攻：由 Levy 步长驱动“局部微调/全局跳变”二分策略。
+        # - 小步长：更偏 exploitation（精修当前可行解）
+        # - 大步长：更偏 exploration（跨车迁移任务）
         """
-        狼群算法-围攻行为(Besieging)极简实现
-        功能: 基于Levy飞行做自适应扰动，短步长局部精细优化，长步长全局跳变，跳出局部最优
-        核心设计: 迭代自适应步长，越靠后步长越小，从全局勘探转向局部开发，完全贴合开题要求
-        冲突解决: 完全复用evaluator.rebuild_wolf()机制，自动规避时空路径冲突
-        开题对应: 围攻行为-Levy飞行扰动跳出局部最优章节
-        :param wolf: 执行围攻行为的狼个体
-        :param curr_iter: 当前迭代次数，用于自适应调整步长
-        :param max_iter: 算法最大迭代次数，用于自适应调整步长
-        :return: Wolf，围攻后的最优个体（原个体或变异后的更优个体）
+        围攻算子：Levy 步长决定“局部微调”还是“全局迁移”。
         """
-        # -------------------------- 1. 深拷贝与边界兜底校验 --------------------------
-        # 深拷贝原狼个体，避免修改原数据
+        # 深拷贝个体。
         new_wolf = copy.deepcopy(wolf)
-        # 筛选有任务的AGV，边界兜底
+        # 仅保留有任务的 AGV。
         active_agvs = [agv for agv in new_wolf.agv_list if agv.tasks]
-        # 边界兜底：无有效AGV，直接返回原个体
         if not active_agvs:
             return wolf
-        # 边界兜底：80%执行概率，20%直接跳过，保护种群多样性
+        # 围攻触发概率控制，避免过强扰动。
         if random.random() > 0.8:
             return wolf
 
-        # -------------------------- 2. 生成自适应Levy飞行步长 --------------------------
-        # 自适应缩放系数：迭代越靠后，系数越小，步长整体越小，从全局勘探转向局部开发
+        # 迭代后期减小步长，逐渐从探索转向开发。
         step_scale = 2.0 * (1 - curr_iter / max_iter)
-        # 生成Levy随机步长
         levy_step = self._levy_flight_step(step_scale=step_scale)
-        # 步长阈值：区分短步长（局部微调）和长步长（全局跳变）
         step_threshold = 1.0
 
-        # -------------------------- 3. 基于Levy步长的两级扰动策略 --------------------------
-        # 情况1：短步长（90%概率触发）- 局部精细开发，单AGV内部任务微调
+        # ---------- 短步长：局部微调 ----------
         if levy_step < step_threshold:
-            # 随机选1辆有任务的AGV，做极小范围的任务顺序调整
             target_agv = random.choice(active_agvs)
-            # 边界兜底：只有1个任务无法调整，直接返回原个体
             if len(target_agv.tasks) < 2:
                 return wolf
-            # 70%概率：相邻任务交换（最小粒度微调，局部优化）
+            # 大概率做相邻交换，小概率做单任务插入。
             if random.random() < 0.7:
-                # 随机选相邻的两个任务索引
                 swap_idx = random.randint(0, len(target_agv.tasks) - 2)
-                # 交换相邻任务顺序，100%保留原有任务
-                target_agv.tasks[swap_idx], target_agv.tasks[swap_idx+1] = target_agv.tasks[swap_idx+1], target_agv.tasks[swap_idx]
-            # 30%概率：单任务随机插入（小范围调整）
+                target_agv.tasks[swap_idx], target_agv.tasks[swap_idx + 1] = (
+                    target_agv.tasks[swap_idx + 1],
+                    target_agv.tasks[swap_idx],
+                )
             else:
-                # 随机选要移动的任务索引和插入位置
                 move_idx, insert_idx = random.sample(range(len(target_agv.tasks)), 2)
-                # 弹出任务，插入到新位置
                 move_task = target_agv.tasks.pop(move_idx)
                 target_agv.tasks.insert(insert_idx, move_task)
-            # 重新计算AGV载重，保证数据一致性
+            # 维护载重一致性。
             target_agv.load = sum([task.weight for task in target_agv.tasks])
 
-        # 情况2：长步长（10%概率触发）- 全局跳变，跨AGV任务迁移，跳出局部最优
+        # ---------- 长步长：全局跳变 ----------
         else:
-            # 边界兜底：至少2辆AGV才能做跨车迁移，否则降级为短步长微调
+            # 需要至少两台车才可跨车迁移。
             if len(active_agvs) < 2:
+                # 若不足两台，降级为再尝试一次围攻（原逻辑保留）。
                 return self.besieging(wolf, curr_iter, max_iter)
-            # 随机选2辆不同的AGV，做跨车任务迁移
+
+            # 随机选两台车做迁移。
             agv_a, agv_b = random.sample(active_agvs, 2)
-            # 边界兜底：AGV无任务，直接返回原个体
             if not agv_a.tasks:
                 return wolf
-            # 随机选1个任务，从AGV-A迁移到AGV-B，保证任务唯一性，无重复无遗漏
+
+            # 从 A 弹出一个任务，插入到 B 任意位置。
             move_task_idx = random.randint(0, len(agv_a.tasks) - 1)
             move_task = agv_a.tasks.pop(move_task_idx)
-            # 随机插入到AGV-B的任务列表中
             agv_b.tasks.insert(random.randint(0, len(agv_b.tasks)), move_task)
 
-            # 重新计算两辆AGV的载重
+            # 更新两车载重。
             agv_a.load = sum([task.weight for task in agv_a.tasks])
             agv_b.load = sum([task.weight for task in agv_b.tasks])
 
-            # -------------------------- 载重硬约束兜底 --------------------------
-            # 如果AGV-B超载，拆分任务到新AGV，复用贪婪分配逻辑
+            # 若 B 超载，做简单拆分并新建一台车承接后半段任务。
             if agv_b.load > Config.AGV_CAPACITY:
                 split_idx = len(agv_b.tasks) // 2
                 split_tasks = agv_b.tasks[split_idx:]
                 agv_b.tasks = agv_b.tasks[:split_idx]
                 agv_b.load = sum([task.weight for task in agv_b.tasks])
 
-                # 生成新AGV
                 new_agv_id = max([agv.id for agv in new_wolf.agv_list]) + 1
                 if new_agv_id >= len(Config.START_NODES):
                     new_agv_id = 0
@@ -421,18 +436,14 @@ class WPAOperators:
                 new_agv.load = sum([task.weight for task in split_tasks])
                 new_wolf.agv_list.append(new_agv)
 
-            # 移除无任务的AGV，优化车辆数量指标
+            # 清理空任务车辆。
             new_wolf.agv_list = [agv for agv in new_wolf.agv_list if agv.tasks]
 
-        # -------------------------- 4. 自动解决时空冲突，重评估方案 --------------------------
-        # 完全复用现有评估逻辑，自动规划无冲突路径，计算适应度
+        # 重建与重评估。
         new_wolf = self.evaluator.rebuild_wolf(new_wolf)
 
-        # -------------------------- 5. 贪婪选择策略，保证迭代不退化 --------------------------
+        # 贪婪接受。
         if new_wolf.fitness < wolf.fitness:
-            # 围攻成功，打印优化日志，包含Levy步长，便于调试
             print(f"  [围攻成功] F值优化: {wolf.fitness:.1f} -> {new_wolf.fitness:.1f} (Levy步长={levy_step:.2f})")
             return new_wolf
-        else:
-            # 围攻失败，返回原个体
-            return wolf
+        return wolf
