@@ -84,6 +84,9 @@ class Wolf:
         self.conflict_count = 0
         # 死锁解锁次数统计。
         self.deadlock_count = 0
+        # 准死锁风险触发次数统计。
+        self.deadlock_risk_count = 0
         # 重规划触发次数统计。
         self.replan_count = 0
-
+        # 局部改道触发次数统计。
+        self.reroute_count = 0
