@@ -1,6 +1,5 @@
-"""
+﻿"""
 固定场景基准批量运行脚本。
-
 作用：
 - 自动运行多个固定场景和多次重复实验。
 - 从主程序输出中解析 F/N/D/T。
@@ -15,7 +14,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 # 从 main 输出中提取最终指标的正则。
 FINAL_METRICS_PATTERN = re.compile(
     r"=== 4\.[\s\S]*?F=([0-9.]+)[\s\S]*?N=([0-9]+)[\s\S]*?D=([0-9]+)[\s\S]*?T=([0-9.]+)",
@@ -23,7 +21,7 @@ FINAL_METRICS_PATTERN = re.compile(
 )
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     """解析命令行参数。"""
     parser = argparse.ArgumentParser(
         description="自动运行固定场景基准（默认3个场景，每场景10次）并追加记录。"
@@ -48,12 +46,12 @@ def parse_args():
     )
     parser.add_argument(
         "--csv",
-        default="benchmark_fixed_inputs_runs.csv",
+        default="docs/benchmarks/benchmark_fixed_inputs_runs.csv",
         help="CSV 结果文件路径。",
     )
     parser.add_argument(
         "--md",
-        default="benchmark_fixed_inputs_summary.md",
+        default="docs/benchmarks/benchmark_fixed_inputs_summary.md",
         help="Markdown 结果文件路径。",
     )
     parser.add_argument(
@@ -65,12 +63,12 @@ def parse_args():
         "--base-seed",
         type=int,
         default=20260220,
-        help="基础种子。实际种子=base_seed+scenario*1000+run。",
+        help="基础种子。实际种子 = base_seed + scenario*1000 + run。",
     )
     return parser.parse_args()
 
 
-def run_once(python_exe, scenario_id, seed):
+def run_once(python_exe: str, scenario_id: int, seed: int) -> dict:
     """运行一次主程序并解析 F/N/D/T。"""
     cmd = [python_exe, "main.py", "--scenario", str(scenario_id), "--seed", str(seed)]
     completed = subprocess.run(cmd, capture_output=True, text=True)
@@ -90,7 +88,7 @@ def run_once(python_exe, scenario_id, seed):
     }
 
 
-def detect_git_tag():
+def detect_git_tag() -> str:
     """自动生成版本标签：<short_commit>[-dirty]。"""
     try:
         commit = subprocess.run(
@@ -105,16 +103,15 @@ def detect_git_tag():
             text=True,
             check=True,
         ).stdout.strip()
-        if dirty:
-            return f"{commit}-dirty"
-        return commit
+        return f"{commit}-dirty" if dirty else commit
     except Exception:
         return "unknown"
 
 
-def append_csv(csv_path, rows):
+def append_csv(csv_path: str, rows: list[dict]) -> None:
     """将原始运行行追加到 CSV。"""
     csv_file = Path(csv_path)
+    csv_file.parent.mkdir(parents=True, exist_ok=True)
     file_exists = csv_file.exists()
     with csv_file.open("a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
@@ -127,14 +124,14 @@ def append_csv(csv_path, rows):
             writer.writerow(row)
 
 
-def summarize_by_scenario(rows):
-    """按场景聚合统计均值/最值。"""
-    groups = {}
+def summarize_by_scenario(rows: list[dict]) -> list[dict]:
+    """按场景聚合统计均值和极值。"""
+    groups: dict[int, list[dict]] = {}
     for row in rows:
         sid = row["scenario"]
         groups.setdefault(sid, []).append(row)
 
-    summary = []
+    summary: list[dict] = []
     for sid in sorted(groups.keys()):
         g = groups[sid]
         f_values = [x["F"] for x in g]
@@ -154,9 +151,10 @@ def summarize_by_scenario(rows):
     return summary
 
 
-def append_markdown(md_path, batch_id, rows, summary):
+def append_markdown(md_path: str, batch_id: str, rows: list[dict], summary: list[dict]) -> None:
     """将原始表与汇总表追加到 Markdown 报告。"""
     md_file = Path(md_path)
+    md_file.parent.mkdir(parents=True, exist_ok=True)
     with md_file.open("a", encoding="utf-8") as f:
         f.write(f"\n\n## Batch {batch_id}\n")
         f.write("\n### 原始结果\n\n")
@@ -176,14 +174,14 @@ def append_markdown(md_path, batch_id, rows, summary):
             )
 
 
-def main():
+def main() -> None:
     """批量运行入口。"""
     args = parse_args()
     now = dt.datetime.now()
     date_str = now.strftime("%Y-%m-%d")
     run_tag = args.tag.strip() if args.tag else detect_git_tag()
     batch_id = f"{now.strftime('%Y-%m-%d %H:%M:%S')} [{run_tag}]"
-    all_rows = []
+    all_rows: list[dict] = []
 
     for scenario_id in args.scenarios:
         for run_idx in range(1, args.runs + 1):
@@ -223,4 +221,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
