@@ -14,7 +14,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-# 从 main 输出中提取最终指标的正则。
 FINAL_METRICS_PATTERN = re.compile(
     r"=== 4\.[\s\S]*?F=([0-9.]+)[\s\S]*?N=([0-9]+)[\s\S]*?D=([0-9]+)[\s\S]*?T=([0-9.]+)",
     re.MULTILINE,
@@ -25,6 +24,12 @@ def parse_args() -> argparse.Namespace:
     """解析命令行参数。"""
     parser = argparse.ArgumentParser(
         description="自动运行固定场景基准（默认3个场景，每场景10次）并追加记录。"
+    )
+    parser.add_argument(
+        "--algorithm",
+        choices=["improved", "original"],
+        default="improved",
+        help="选择算法版本。",
     )
     parser.add_argument(
         "--scenarios",
@@ -46,12 +51,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--csv",
-        default="docs/benchmarks/benchmark_fixed_inputs_runs.csv",
+        default="docs/benchmarks/benchmark_runs.csv",
         help="CSV 结果文件路径。",
     )
     parser.add_argument(
         "--md",
-        default="docs/benchmarks/benchmark_fixed_inputs_summary.md",
+        default="docs/benchmarks/benchmark_summary.md",
         help="Markdown 结果文件路径。",
     )
     parser.add_argument(
@@ -68,9 +73,18 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run_once(python_exe: str, scenario_id: int, seed: int) -> dict:
+def run_once(python_exe: str, scenario_id: int, seed: int, algorithm: str) -> dict:
     """运行一次主程序并解析 F/N/D/T。"""
-    cmd = [python_exe, "main.py", "--scenario", str(scenario_id), "--seed", str(seed)]
+    cmd = [
+        python_exe,
+        "main.py",
+        "--scenario",
+        str(scenario_id),
+        "--seed",
+        str(seed),
+        "--algorithm",
+        algorithm,
+    ]
     completed = subprocess.run(cmd, capture_output=True, text=True)
     if completed.returncode != 0:
         raise RuntimeError(
@@ -116,7 +130,18 @@ def append_csv(csv_path: str, rows: list[dict]) -> None:
     with csv_file.open("a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["date", "batch_id", "scenario", "run", "seed", "F", "N", "D", "T"],
+            fieldnames=[
+                "date",
+                "batch_id",
+                "algorithm",
+                "scenario",
+                "run",
+                "seed",
+                "F",
+                "N",
+                "D",
+                "T",
+            ],
         )
         if not file_exists:
             writer.writeheader()
@@ -151,18 +176,20 @@ def summarize_by_scenario(rows: list[dict]) -> list[dict]:
     return summary
 
 
-def append_markdown(md_path: str, batch_id: str, rows: list[dict], summary: list[dict]) -> None:
+def append_markdown(
+    md_path: str, batch_id: str, rows: list[dict], summary: list[dict]
+) -> None:
     """将原始表与汇总表追加到 Markdown 报告。"""
     md_file = Path(md_path)
     md_file.parent.mkdir(parents=True, exist_ok=True)
     with md_file.open("a", encoding="utf-8") as f:
         f.write(f"\n\n## Batch {batch_id}\n")
         f.write("\n### 原始结果\n\n")
-        f.write("| Scenario | Run | F | N | D | T |\n")
-        f.write("|---|---:|---:|---:|---:|---:|\n")
+        f.write("| Algorithm | Scenario | Run | F | N | D | T |\n")
+        f.write("|---|---|---:|---:|---:|---:|---:|\n")
         for row in rows:
             f.write(
-                f"| {row['scenario']} | {row['run']} | {row['F']:.2f} | {row['N']} | {row['D']} | {row['T']:.2f} |\n"
+                f"| {row['algorithm']} | {row['scenario']} | {row['run']} | {row['F']:.2f} | {row['N']} | {row['D']} | {row['T']:.2f} |\n"
             )
 
         f.write("\n### 本批次汇总\n\n")
@@ -180,16 +207,17 @@ def main() -> None:
     now = dt.datetime.now()
     date_str = now.strftime("%Y-%m-%d")
     run_tag = args.tag.strip() if args.tag else detect_git_tag()
-    batch_id = f"{now.strftime('%Y-%m-%d %H:%M:%S')} [{run_tag}]"
+    batch_id = f"{now.strftime('%Y-%m-%d %H:%M:%S')} [{run_tag}][{args.algorithm}]"
     all_rows: list[dict] = []
 
     for scenario_id in args.scenarios:
         for run_idx in range(1, args.runs + 1):
             seed = args.base_seed + scenario_id * 1000 + run_idx
-            metrics = run_once(args.python, scenario_id, seed)
+            metrics = run_once(args.python, scenario_id, seed, args.algorithm)
             row = {
                 "date": date_str,
                 "batch_id": batch_id,
+                "algorithm": args.algorithm,
                 "scenario": scenario_id,
                 "run": run_idx,
                 "seed": seed,
@@ -200,7 +228,7 @@ def main() -> None:
             }
             all_rows.append(row)
             print(
-                f"[OK] scenario={scenario_id} run={run_idx} -> "
+                f"[OK] algorithm={args.algorithm} scenario={scenario_id} run={run_idx} -> "
                 f"seed={seed} | F={metrics['F']:.2f}, N={metrics['N']}, D={metrics['D']}, T={metrics['T']:.2f}"
             )
 
@@ -211,7 +239,7 @@ def main() -> None:
     print("\n=== 本批次汇总 ===")
     for s in summary:
         print(
-            f"scenario={s['scenario']} runs={s['runs']} "
+            f"algorithm={args.algorithm} scenario={s['scenario']} runs={s['runs']} "
             f"F_mean={s['F_mean']:.2f} F_min={s['F_min']:.2f} F_max={s['F_max']:.2f} "
             f"D_mean={s['D_mean']:.2f} T_mean={s['T_mean']:.2f}"
         )
