@@ -186,49 +186,53 @@ class WPAOperators:
 
         return new_seq
 
-    def scouting(self, wolf):
-        """Improved scouting: light local perturbation inside one AGV."""
-        new_wolf = copy.deepcopy(wolf)
-        active_agvs = [agv for agv in new_wolf.agv_list if len(agv.tasks) >= 2]
-        if not active_agvs:
-            return wolf
+    def _soft_align_to_alpha(self, task_seq, alpha_seq, steps=1):
+        """Move a few highly mismatched tasks one step toward leader order."""
+        if len(task_seq) < 2 or len(task_seq) != len(alpha_seq):
+            return None
 
-        target_agv = random.choice(active_agvs)
-        idx1, idx2 = random.sample(range(len(target_agv.tasks)), 2)
-        target_agv.tasks[idx1], target_agv.tasks[idx2] = target_agv.tasks[idx2], target_agv.tasks[idx1]
+        new_seq = self._copy_wolf_tasks(task_seq)
+        alpha_pos = self._index_map(alpha_seq)
 
-        new_wolf = self.evaluator.rebuild_wolf(new_wolf)
-        if new_wolf.fitness < wolf.fitness:
-            print(f"  [scout improved] F {wolf.fitness:.1f} -> {new_wolf.fitness:.1f}")
-            return new_wolf
-        return wolf
+        mismatched = [
+            (abs(idx - alpha_pos[task.id]), task.id)
+            for idx, task in enumerate(new_seq)
+            if idx != alpha_pos[task.id]
+        ]
+        if not mismatched:
+            return None
 
-    def summoning(self, wolf, alpha_wolf):
-        """Improved summoning: OX-style inheritance plus cost-based decoding."""
-        new_wolf = copy.deepcopy(wolf)
-        alpha_copy = copy.deepcopy(alpha_wolf)
+        mismatched.sort(reverse=True)
+        used = 0
+        for _, task_id in mismatched:
+            if used >= steps:
+                break
+            current_idx = next(i for i, task in enumerate(new_seq) if task.id == task_id)
+            target_idx = alpha_pos[task_id]
+            if current_idx == target_idx:
+                continue
+            direction = 1 if target_idx > current_idx else -1
+            item = new_seq.pop(current_idx)
+            new_seq.insert(current_idx + direction, item)
+            used += 1
 
-        if not alpha_copy.agv_list or not new_wolf.agv_list:
-            return wolf
-        if random.random() > 0.6:
-            return wolf
+        return new_seq
 
-        alpha_tasks = self._flatten_tasks(alpha_copy)
-        wolf_tasks = self._flatten_tasks(new_wolf)
-        if len(alpha_tasks) < 2 or len(wolf_tasks) < 2:
-            return wolf
+    def _ox_inherit(self, wolf_tasks, alpha_tasks, seg_len_min=2, seg_len_max=3):
+        """Build one OX-style child with a short elite segment."""
+        if len(wolf_tasks) < 2 or len(alpha_tasks) != len(wolf_tasks):
+            return None
 
         wolf_task_map = {t.id: t for t in wolf_tasks}
         wolf_ids = [t.id for t in wolf_tasks]
         alpha_ids = [t.id for t in alpha_tasks if t.id in wolf_task_map]
         if len(alpha_ids) != len(wolf_ids):
-            return wolf
+            return None
 
         n = len(wolf_ids)
-        seg_len_min = 2
-        seg_len_max = min(4, n)
+        seg_len_max = min(seg_len_max, n)
         if seg_len_max < seg_len_min:
-            return wolf
+            return None
 
         seg_len = random.randint(seg_len_min, seg_len_max)
         alpha_start = random.randint(0, n - seg_len)
@@ -245,17 +249,82 @@ class WPAOperators:
                 child_ids[i] = fill_candidates[fill_idx]
                 fill_idx += 1
 
-        child_task_seq = [wolf_task_map[tid] for tid in child_ids]
-        decoded_agvs = self._decode_sequence_to_agvs_cost_based(child_task_seq)
-        if decoded_agvs is None:
+        return [wolf_task_map[tid] for tid in child_ids]
+
+    def _short_reverse(self, task_seq, seg_len_max=4):
+        """Reverse a short segment as a bounded medium-strength perturbation."""
+        if len(task_seq) < 3:
+            return None
+        new_seq = self._copy_wolf_tasks(task_seq)
+        seg_len = random.randint(2, min(seg_len_max, len(new_seq)))
+        start = random.randint(0, len(new_seq) - seg_len)
+        end = start + seg_len
+        new_seq[start:end] = list(reversed(new_seq[start:end]))
+        return new_seq
+
+    def scouting(self, wolf):
+        """Improved scouting: multi-direction discrete probing with择优接受."""
+        current_seq = self._flatten_tasks(wolf)
+        if len(current_seq) < 2:
             return wolf
 
-        new_wolf.agv_list = decoded_agvs
-        new_wolf = self.evaluator.rebuild_wolf(new_wolf)
+        candidate_best = None
+        for operator_name in ["swap", "insert", "reverse"]:
+            candidate_seq = self._neighbor_by_operator(current_seq, operator_name)
+            if candidate_seq is None:
+                continue
+            candidate_wolf = self._rebuild_from_task_sequence(wolf, candidate_seq, decoder="cost_based")
+            if candidate_wolf is None:
+                continue
+            if (candidate_best is None) or (candidate_wolf.fitness < candidate_best.fitness):
+                candidate_best = candidate_wolf
 
-        if new_wolf.fitness < wolf.fitness:
-            print(f"  [summon improved] F {wolf.fitness:.1f} -> {new_wolf.fitness:.1f} (seg={seg_len})")
-            return new_wolf
+        if candidate_best is not None and candidate_best.fitness < wolf.fitness:
+            print(f"  [scout improved] F {wolf.fitness:.1f} -> {candidate_best.fitness:.1f}")
+            return candidate_best
+        return wolf
+
+    def summoning(self, wolf, alpha_wolf):
+        """Improved summoning: short OX inheritance plus soft leader alignment."""
+        alpha_copy = copy.deepcopy(alpha_wolf)
+        if not alpha_copy.agv_list or not wolf.agv_list:
+            return wolf
+        if random.random() > 0.75:
+            return wolf
+
+        alpha_tasks = self._flatten_tasks(alpha_copy)
+        wolf_tasks = self._flatten_tasks(wolf)
+        if len(alpha_tasks) < 2 or len(wolf_tasks) < 2:
+            return wolf
+
+        candidates = []
+
+        ox_seq = self._ox_inherit(wolf_tasks, alpha_tasks, seg_len_min=2, seg_len_max=3)
+        if ox_seq is not None:
+            candidates.append(("ox", ox_seq))
+
+        align_seq = self._soft_align_to_alpha(wolf_tasks, alpha_tasks, steps=2)
+        if align_seq is not None:
+            candidates.append(("align", align_seq))
+
+        if ox_seq is not None:
+            ox_align_seq = self._soft_align_to_alpha(ox_seq, alpha_tasks, steps=1)
+            if ox_align_seq is not None:
+                candidates.append(("ox+align", ox_align_seq))
+
+        candidate_best = None
+        candidate_name = None
+        for name, candidate_seq in candidates:
+            candidate_wolf = self._rebuild_from_task_sequence(wolf, candidate_seq, decoder="cost_based")
+            if candidate_wolf is None:
+                continue
+            if (candidate_best is None) or (candidate_wolf.fitness < candidate_best.fitness):
+                candidate_best = candidate_wolf
+                candidate_name = name
+
+        if candidate_best is not None and candidate_best.fitness < wolf.fitness:
+            print(f"  [summon improved] F {wolf.fitness:.1f} -> {candidate_best.fitness:.1f} ({candidate_name})")
+            return candidate_best
         return wolf
 
     def _levy_flight_step(self, beta=1.5, step_scale=1.0):
@@ -268,11 +337,11 @@ class WPAOperators:
         step = step_scale * u / np.power(np.abs(v), 1 / beta)
         return abs(step[0])
 
-    def besieging(self, wolf, curr_iter, max_iter):
-        """Improved besieging: Levy-driven local refine or global jump."""
-        new_wolf = copy.deepcopy(wolf)
-        active_agvs = [agv for agv in new_wolf.agv_list if agv.tasks]
-        if not active_agvs:
+    def besieging(self, wolf, alpha_wolf, curr_iter, max_iter):
+        """Improved besieging: constrained Levy-guided local/global refinement."""
+        current_seq = self._flatten_tasks(wolf)
+        alpha_seq = self._flatten_tasks(alpha_wolf)
+        if len(current_seq) < 2 or len(current_seq) != len(alpha_seq):
             return wolf
         if random.random() > 0.8:
             return wolf
@@ -281,56 +350,38 @@ class WPAOperators:
         levy_step = self._levy_flight_step(step_scale=step_scale)
         step_threshold = 1.0
 
+        candidates = []
         if levy_step < step_threshold:
-            target_agv = random.choice(active_agvs)
-            if len(target_agv.tasks) < 2:
-                return wolf
-            if random.random() < 0.7:
-                swap_idx = random.randint(0, len(target_agv.tasks) - 2)
-                target_agv.tasks[swap_idx], target_agv.tasks[swap_idx + 1] = (
-                    target_agv.tasks[swap_idx + 1],
-                    target_agv.tasks[swap_idx],
-                )
-            else:
-                move_idx, insert_idx = random.sample(range(len(target_agv.tasks)), 2)
-                move_task = target_agv.tasks.pop(move_idx)
-                target_agv.tasks.insert(insert_idx, move_task)
-            target_agv.load = sum(task.weight for task in target_agv.tasks)
+            align_seq = self._soft_align_to_alpha(current_seq, alpha_seq, steps=1)
+            if align_seq is not None:
+                candidates.append(("local-align", align_seq))
+            swap_seq = self._neighbor_by_operator(current_seq, random.choice(["swap", "insert"]))
+            if swap_seq is not None:
+                candidates.append(("local-neighbor", swap_seq))
         else:
-            if len(active_agvs) < 2:
-                return wolf
+            align_seq = self._soft_align_to_alpha(current_seq, alpha_seq, steps=2)
+            if align_seq is not None:
+                candidates.append(("global-align", align_seq))
+            reverse_seq = self._short_reverse(current_seq, seg_len_max=4)
+            if reverse_seq is not None:
+                candidates.append(("bounded-reverse", reverse_seq))
 
-            agv_a, agv_b = random.sample(active_agvs, 2)
-            if not agv_a.tasks:
-                return wolf
+        candidate_best = None
+        candidate_name = None
+        for name, candidate_seq in candidates:
+            candidate_wolf = self._rebuild_from_task_sequence(wolf, candidate_seq, decoder="cost_based")
+            if candidate_wolf is None:
+                continue
+            if (candidate_best is None) or (candidate_wolf.fitness < candidate_best.fitness):
+                candidate_best = candidate_wolf
+                candidate_name = name
 
-            move_task_idx = random.randint(0, len(agv_a.tasks) - 1)
-            move_task = agv_a.tasks.pop(move_task_idx)
-            agv_b.tasks.insert(random.randint(0, len(agv_b.tasks)), move_task)
-
-            agv_a.load = sum(task.weight for task in agv_a.tasks)
-            agv_b.load = sum(task.weight for task in agv_b.tasks)
-
-            if agv_b.load > Config.AGV_CAPACITY:
-                split_idx = len(agv_b.tasks) // 2
-                split_tasks = agv_b.tasks[split_idx:]
-                agv_b.tasks = agv_b.tasks[:split_idx]
-                agv_b.load = sum(task.weight for task in agv_b.tasks)
-
-                new_agv_id = max(agv.id for agv in new_wolf.agv_list) + 1
-                if new_agv_id >= len(Config.START_NODES):
-                    new_agv_id = 0
-                new_agv = AGV(agv_id=new_agv_id, start_pos=Config.START_NODES[new_agv_id])
-                new_agv.tasks = split_tasks
-                new_agv.load = sum(task.weight for task in split_tasks)
-                new_wolf.agv_list.append(new_agv)
-
-            new_wolf.agv_list = [agv for agv in new_wolf.agv_list if agv.tasks]
-
-        new_wolf = self.evaluator.rebuild_wolf(new_wolf)
-        if new_wolf.fitness < wolf.fitness:
-            print(f"  [besiege improved] F {wolf.fitness:.1f} -> {new_wolf.fitness:.1f} (levy={levy_step:.2f})")
-            return new_wolf
+        if candidate_best is not None and candidate_best.fitness < wolf.fitness:
+            print(
+                f"  [besiege improved] F {wolf.fitness:.1f} -> {candidate_best.fitness:.1f} "
+                f"(levy={levy_step:.2f}, {candidate_name})"
+            )
+            return candidate_best
         return wolf
 
     def original_scouting(self, wolf, alpha_wolf, max_walks=4):

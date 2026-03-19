@@ -1,12 +1,13 @@
-"""
-Package entry point for the AGV scheduling project.
+﻿"""Package entry point and reusable execution helpers for the AGV WPA project."""
 
-This module keeps one shared experiment framework and exposes multiple
-algorithm variants through a command line flag.
-"""
+from __future__ import annotations
 
 import argparse
+import contextlib
+import os
 import random
+from dataclasses import asdict, dataclass
+from typing import Any
 
 import numpy as np
 
@@ -19,14 +20,45 @@ from .utils import generate_grid_map
 from .wpa_ops import WPAOperators
 
 
-def list_scenarios():
+@dataclass
+class RunResult:
+    """Structured result returned by one full algorithm run."""
+
+    algorithm: str
+    scenario: int | None
+    scenario_name: str
+    seed: int | None
+    fitness: float
+    vehicle_num: int
+    total_dist: int
+    time_penalty: float
+    conflict_count: int
+    deadlock_count: int
+    deadlock_risk_count: int
+    replan_count: int
+    reroute_count: int
+    wolf: Any
+
+
+@contextlib.contextmanager
+def _suppress_stdout(enabled: bool):
+    """Suppress all stdout when benchmark workers run in quiet mode."""
+    if not enabled:
+        yield
+        return
+    with open(os.devnull, "w", encoding="utf-8") as devnull, contextlib.redirect_stdout(devnull):
+        yield
+
+
+def list_scenarios() -> None:
     """Print all fixed benchmark scenarios."""
     print("可用固定输入场景：")
     for idx, scenario in enumerate(SCENARIO_LIBRARY, start=1):
         print(f"  {idx}. {scenario['name']} - {scenario['description']}")
 
 
-def load_scenario(scenario_index):
+
+def load_scenario(scenario_index: int):
     """Load one fixed scenario by 1-based index."""
     if scenario_index < 1 or scenario_index > len(SCENARIO_LIBRARY):
         raise ValueError(f"场景编号无效: {scenario_index}")
@@ -49,7 +81,8 @@ def load_scenario(scenario_index):
     return grid_map, task_list, scenario["name"]
 
 
-def parse_args():
+
+def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="多AGV狼群算法调度仿真")
     parser.add_argument(
@@ -73,9 +106,15 @@ def parse_args():
         "--algorithm",
         choices=["improved", "original"],
         default="improved",
-        help="选择算法版本：improved 为当前改进版，original 为原始WPA离散映射版。",
+        help="算法版本：improved 为当前改进版，original 为原始WPA离散映射版。",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="静默运行，仅输出最终结果。",
     )
     return parser.parse_args()
+
 
 
 def build_random_tasks(grid_map):
@@ -91,8 +130,9 @@ def build_random_tasks(grid_map):
     return task_list
 
 
+
 def run_iteration_improved(population, operators, initializer, global_best_wolf, iter_idx, max_iter, scouts_num):
-    """Run one iteration of the current improved WPA."""
+    """Run one iteration of the improved WPA."""
     print("> 探狼执行游走行为...")
     for i in range(scouts_num):
         population[i] = operators.scouting(population[i])
@@ -113,7 +153,7 @@ def run_iteration_improved(population, operators, initializer, global_best_wolf,
 
     print("> 全种群执行围攻行为...")
     for i in range(1, len(population)):
-        population[i] = operators.besieging(population[i], iter_idx, max_iter)
+        population[i] = operators.besieging(population[i], global_best_wolf, iter_idx, max_iter)
     population.sort(key=lambda w: w.fitness)
     current_alpha = population[0]
     if current_alpha.fitness < global_best_wolf.fitness:
@@ -130,6 +170,7 @@ def run_iteration_improved(population, operators, initializer, global_best_wolf,
     if current_alpha.fitness < global_best_wolf.fitness:
         global_best_wolf = current_alpha
     return population, global_best_wolf
+
 
 
 def run_iteration_original(population, operators, initializer, global_best_wolf, scouts_num):
@@ -173,21 +214,17 @@ def run_iteration_original(population, operators, initializer, global_best_wolf,
     return population, global_best_wolf
 
 
-def main():
-    """Program main flow."""
-    args = parse_args()
-    if args.list_scenarios:
-        list_scenarios()
-        return
 
-    if args.seed is not None:
-        random.seed(args.seed)
-        np.random.seed(args.seed)
-        print(f"=== 0. 固定随机种子 seed={args.seed} ===")
+def _run_algorithm_impl(scenario: int | None, seed: int | None, algorithm: str, allow_interactive: bool) -> RunResult:
+    """Execute one full optimization run and return the final structured result."""
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
+        print(f"=== 0. 固定随机种子 seed={seed} ===")
 
     print("=== 1. 仓储环境与任务构建 ===")
-    selected_scenario = args.scenario
-    if selected_scenario is None:
+    selected_scenario = scenario
+    if selected_scenario is None and allow_interactive:
         list_scenarios()
         raw = input("请输入场景编号（直接回车使用随机输入）：").strip()
         if raw:
@@ -198,16 +235,13 @@ def main():
                 print("  > 场景编号解析失败，自动切换为随机输入模式。")
 
     if selected_scenario is not None:
-        try:
-            grid_map, task_list, scenario_name = load_scenario(selected_scenario)
-            print(f"  > 使用固定场景 #{selected_scenario}: {scenario_name}")
-            print(f"  > 成功加载 {len(task_list)} 个固定任务")
-        except ValueError as exc:
-            print(f"  > 固定场景加载失败: {exc}")
-            return
+        grid_map, task_list, scenario_name = load_scenario(selected_scenario)
+        print(f"  > 使用固定场景 #{selected_scenario}: {scenario_name}")
+        print(f"  > 成功加载 {len(task_list)} 个固定任务")
     else:
         grid_map = generate_grid_map()
         task_list = build_random_tasks(grid_map)
+        scenario_name = "随机任务"
         print(f"  > 成功生成 {len(task_list)} 个随机任务")
 
     print("\n=== 2. 狼群种群初始化 ===")
@@ -227,11 +261,10 @@ def main():
     operators = WPAOperators(evaluator)
     global_best_wolf = alpha_wolf
 
-    print(f"\n=== 3. 开始狼群算法迭代，算法版本={args.algorithm}，最大迭代次数={max_iter} ===")
+    print(f"\n=== 3. 开始狼群算法迭代，算法版本={algorithm}，最大迭代次数={max_iter} ===")
     for iter_idx in range(max_iter):
         print(f"\n--- 第 {iter_idx + 1}/{max_iter} 代迭代开始 ---")
-
-        if args.algorithm == "original":
+        if algorithm == "original":
             population, global_best_wolf = run_iteration_original(
                 population, operators, initializer, global_best_wolf, scouts_num
             )
@@ -249,7 +282,7 @@ def main():
         )
 
     print("\n=== 4. 算法迭代结束，最终优化结果 ===")
-    print(f"  算法版本：{args.algorithm}")
+    print(f"  算法版本：{algorithm}")
     print("  全局最优调度方案核心指标：")
     print(f"    多目标适应度F={global_best_wolf.fitness:.2f}")
     print(f"    使用AGV车辆数N={global_best_wolf.vehicle_num}")
@@ -264,10 +297,72 @@ def main():
     print("  方案详情：")
     for agv in global_best_wolf.agv_list:
         print(
-            f"    AGV-{agv.id}：任务数={len(agv.tasks)} | "
-            f"最终载重={agv.load}kg | 完成时间={agv.finish_time}秒"
+            f"    AGV-{agv.id}：任务数={len(agv.tasks)} | 最终载重={agv.load}kg | 完成时间={agv.finish_time}秒"
         )
         print(f"      任务执行顺序：{agv.tasks}")
+
+    return RunResult(
+        algorithm=algorithm,
+        scenario=selected_scenario,
+        scenario_name=scenario_name,
+        seed=seed,
+        fitness=float(global_best_wolf.fitness),
+        vehicle_num=int(global_best_wolf.vehicle_num),
+        total_dist=int(global_best_wolf.total_dist),
+        time_penalty=float(global_best_wolf.time_penalty),
+        conflict_count=int(getattr(global_best_wolf, "conflict_count", 0)),
+        deadlock_count=int(getattr(global_best_wolf, "deadlock_count", 0)),
+        deadlock_risk_count=int(getattr(global_best_wolf, "deadlock_risk_count", 0)),
+        replan_count=int(getattr(global_best_wolf, "replan_count", 0)),
+        reroute_count=int(getattr(global_best_wolf, "reroute_count", 0)),
+        wolf=global_best_wolf,
+    )
+
+
+
+def run_algorithm(
+    scenario: int | None = None,
+    seed: int | None = None,
+    algorithm: str = "improved",
+    *,
+    verbose: bool = True,
+    allow_interactive: bool = False,
+) -> RunResult:
+    """Reusable API for one run.
+
+    Benchmark workers call this function directly to avoid subprocess startup and
+    stdout parsing overhead.
+    """
+    with _suppress_stdout(not verbose):
+        return _run_algorithm_impl(scenario, seed, algorithm, allow_interactive)
+
+
+
+def result_to_metrics(result: RunResult) -> dict[str, float | int | str | None]:
+    """Convert a run result to the benchmark metric shape."""
+    data = asdict(result)
+    data["F"] = data.pop("fitness")
+    data["N"] = data.pop("vehicle_num")
+    data["D"] = data.pop("total_dist")
+    data["T"] = data.pop("time_penalty")
+    data.pop("wolf", None)
+    return data
+
+
+
+def main() -> None:
+    """CLI entry point."""
+    args = parse_args()
+    if args.list_scenarios:
+        list_scenarios()
+        return
+    run_algorithm(
+        scenario=args.scenario,
+        seed=args.seed,
+        algorithm=args.algorithm,
+        verbose=not args.quiet,
+        allow_interactive=True,
+    )
 
 
 if __name__ == "__main__":
