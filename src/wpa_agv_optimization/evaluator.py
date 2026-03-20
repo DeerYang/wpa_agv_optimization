@@ -147,11 +147,12 @@ class WolfEvaluator:
             curr_time = 0
             full_path: List[TimedNode] = []
 
-            targets = [(task.x, task.y) for task in agv.tasks]
+            targets = list(agv.tasks)
             if agv.tasks:
-                targets.append(Config.DEPOT_NODE)
+                targets.append(None)
 
-            for target_pos in targets:
+            for target in targets:
+                target_pos = Config.DEPOT_NODE if target is None else (target.x, target.y)
                 max_retries = 8
                 retries = 0
                 segment_path: Optional[List[TimedNode]] = None
@@ -260,6 +261,8 @@ class WolfEvaluator:
                 last_node = segment_path[-1]
                 curr_pos = (last_node[0], last_node[1])
                 curr_time = last_node[2] + Config.SERVICE_TIME
+                if target is not None:
+                    total_time_penalty += max(0, curr_time - target.deadline)
 
                 for point in segment_path:
                     reservation_table.add(point)
@@ -285,11 +288,6 @@ class WolfEvaluator:
             agv.finish_time = curr_time
             total_dist += len(full_path)
 
-            if agv.tasks:
-                last_deadline = agv.tasks[-1].deadline
-                if curr_time > last_deadline:
-                    total_time_penalty += curr_time - last_deadline
-
         wolf.total_dist = total_dist
         wolf.time_penalty = total_time_penalty
         wolf.vehicle_num = len([agv for agv in wolf.agv_list if agv.tasks])
@@ -297,6 +295,9 @@ class WolfEvaluator:
             (Config.W1_DIST * total_dist)
             + (Config.W2_NUM * wolf.vehicle_num)
             + (Config.W3_TIME * total_time_penalty)
+            + (Config.W4_CONFLICT * conflict_count)
+            + (Config.W5_REPLAN * replan_count)
+            + (Config.W6_RISK * deadlock_risk_count)
         )
 
         wolf.conflict_count = conflict_count
