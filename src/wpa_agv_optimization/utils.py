@@ -38,6 +38,17 @@ def tent_map_generate(n, x0=0.4):
     # 返回完整序列。
     return sequence
 
+def tent_map_iter(x0=0.4):
+    """Yield Tent chaotic values lazily for planner tie breaks."""
+    x = x0
+    while True:
+        if x < 0.5:
+            x = 2 * x
+        else:
+            x = 2 * (1 - x)
+        yield x
+
+
 
 def generate_grid_map():
     """

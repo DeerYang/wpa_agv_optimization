@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from .config import Config
 from .pathfinding import TentDFSPlanner
 from .traffic_manager import TrafficManager
-from .utils import manhattan_dist, tent_map_generate
+from .utils import manhattan_dist, tent_map_iter
 
 
 Node = Tuple[int, int]
@@ -138,8 +138,7 @@ class WolfEvaluator:
         resource_repeat_counts: Dict[str, int] = {}
 
         x0 = random.random()
-        chaos_seq = tent_map_generate(n=5000, x0=x0)
-        chaos_iter = iter(chaos_seq)
+        chaos_iter = tent_map_iter(x0=x0)
 
         for agv in wolf.agv_list:
             wait_counts.setdefault(agv.id, 0)
@@ -159,13 +158,13 @@ class WolfEvaluator:
                 temporary_blocks: Set[TimedNode] = set()
 
                 while retries <= max_retries:
-                    effective_reservation = reservation_table | temporary_blocks
                     segment_path = self.planner.plan(
                         curr_pos,
                         target_pos,
                         curr_time,
-                        effective_reservation,
+                        reservation_table,
                         chaos_iter,
+                        extra_blocks=temporary_blocks,
                     )
 
                     if segment_path is None:
