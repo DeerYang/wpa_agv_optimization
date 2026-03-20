@@ -43,6 +43,185 @@ class WPAOperators:
         """Build a task id to index mapping."""
         return {task.id: idx for idx, task in enumerate(task_seq)}
 
+    @staticmethod
+    def _task_pos(task):
+        """Return one task's grid position."""
+        return (task.x, task.y)
+
+    def _agv_route_cost(self, agv):
+        """Estimate one AGV route cost for bottleneck detection."""
+        return self._estimate_route_cost(agv.tasks, agv.start_pos)
+
+    def _bottleneck_task_ids(self, wolf):
+        """Return all task ids on the currently worst AGV route."""
+        active_agvs = [agv for agv in wolf.agv_list if agv.tasks]
+        if not active_agvs:
+            return set()
+        bottleneck_agv = max(active_agvs, key=self._agv_route_cost)
+        return {task.id for task in bottleneck_agv.tasks}
+
+    def _task_risk_score(self, task_seq, idx, focus_ids=None):
+        """Approximate which tasks deserve priority adjustment."""
+        focus_ids = set() if focus_ids is None else set(focus_ids)
+        task = task_seq[idx]
+
+        prev_pos = Config.DEPOT_NODE if idx == 0 else self._task_pos(task_seq[idx - 1])
+        curr_pos = self._task_pos(task)
+        next_pos = Config.DEPOT_NODE if idx == len(task_seq) - 1 else self._task_pos(task_seq[idx + 1])
+        detour = (
+            manhattan_dist(prev_pos, curr_pos)
+            + manhattan_dist(curr_pos, next_pos)
+            - manhattan_dist(prev_pos, next_pos)
+        )
+        deadline_bias = max(0, 260 - task.deadline) / 12.0
+        focus_bias = 6.0 if task.id in focus_ids else 0.0
+        return detour + deadline_bias + focus_bias
+
+    def _best_insert_position(self, base_seq, task):
+        """Find the lowest local-cost insertion slot for one task."""
+        best_seq = None
+        best_cost = None
+
+        for insert_idx in range(len(base_seq) + 1):
+            candidate = base_seq[:insert_idx] + [task] + base_seq[insert_idx:]
+            cost = 0.0
+            for idx in range(len(candidate)):
+                cost += self._task_risk_score(candidate, idx)
+            if (best_cost is None) or (cost < best_cost):
+                best_cost = cost
+                best_seq = candidate
+
+        return best_seq
+
+    def _guided_reinsert_by_risk(self, task_seq, focus_ids=None, top_k=3):
+        """Move one high-risk task to its best local insertion slot."""
+        if len(task_seq) < 3:
+            return None
+
+        focus_ids = set() if focus_ids is None else set(focus_ids)
+        ranked = sorted(
+            ((self._task_risk_score(task_seq, idx, focus_ids), idx) for idx in range(len(task_seq))),
+            reverse=True,
+        )
+
+        best_candidate = None
+        best_cost = None
+        for _, idx in ranked[:top_k]:
+            base_seq = self._copy_wolf_tasks(task_seq)
+            task = base_seq.pop(idx)
+            candidate = self._best_insert_position(base_seq, task)
+            if candidate is None:
+                continue
+            cost = sum(self._task_risk_score(candidate, i, focus_ids) for i in range(len(candidate)))
+            if (best_cost is None) or (cost < best_cost):
+                best_cost = cost
+                best_candidate = candidate
+
+        return best_candidate
+
+    def _pull_forward_high_risk_task(self, task_seq, focus_ids=None, step_cap=3):
+        """Pull one high-risk task forward by a few positions."""
+        if len(task_seq) < 3:
+            return None
+
+        focus_ids = set() if focus_ids is None else set(focus_ids)
+        idx = max(range(len(task_seq)), key=lambda i: self._task_risk_score(task_seq, i, focus_ids))
+        if idx == 0:
+            return None
+
+        new_seq = self._copy_wolf_tasks(task_seq)
+        item = new_seq.pop(idx)
+        new_idx = max(0, idx - step_cap)
+        new_seq.insert(new_idx, item)
+        return new_seq
+
+    def _swap_across_regions(self, task_seq, focus_ids=None):
+        """Swap one bottleneck-region task with one non-bottleneck task."""
+        if len(task_seq) < 2:
+            return None
+
+        focus_ids = set() if focus_ids is None else set(focus_ids)
+        focus_indices = [idx for idx, task in enumerate(task_seq) if task.id in focus_ids]
+        other_indices = [idx for idx, task in enumerate(task_seq) if task.id not in focus_ids]
+        if not focus_indices or not other_indices:
+            return None
+
+        i = max(focus_indices, key=lambda idx: self._task_risk_score(task_seq, idx, focus_ids))
+        j = min(other_indices, key=lambda idx: self._task_risk_score(task_seq, idx, focus_ids))
+        if i == j:
+            return None
+
+        new_seq = self._copy_wolf_tasks(task_seq)
+        new_seq[i], new_seq[j] = new_seq[j], new_seq[i]
+        return new_seq
+
+    def _choose_alpha_cluster(self, alpha_wolf, seg_len_min=2, seg_len_max=4):
+        """Choose one compact leader task cluster for structured inheritance."""
+        best_cluster = None
+        best_score = None
+
+        for agv in alpha_wolf.agv_list:
+            tasks = agv.tasks
+            if len(tasks) < seg_len_min:
+                continue
+            max_len = min(seg_len_max, len(tasks))
+            for seg_len in range(seg_len_min, max_len + 1):
+                for start in range(len(tasks) - seg_len + 1):
+                    cluster = tasks[start : start + seg_len]
+                    score = 0.0
+                    for idx in range(len(cluster) - 1):
+                        score += manhattan_dist(self._task_pos(cluster[idx]), self._task_pos(cluster[idx + 1]))
+                    score += sum(task.deadline for task in cluster) / (150.0 * len(cluster))
+                    if (best_score is None) or (score < best_score):
+                        best_score = score
+                        best_cluster = cluster
+
+        return best_cluster
+
+    def _inherit_cluster_sequence(self, wolf_tasks, alpha_tasks, cluster_tasks):
+        """Keep one alpha task cluster contiguous inside the follower sequence."""
+        if not cluster_tasks:
+            return None
+
+        cluster_ids = [task.id for task in cluster_tasks]
+        wolf_task_map = {task.id: task for task in wolf_tasks}
+        if any(task_id not in wolf_task_map for task_id in cluster_ids):
+            return None
+
+        alpha_pos = self._index_map(alpha_tasks)
+        base_ids = [task.id for task in wolf_tasks if task.id not in cluster_ids]
+        target_center = sum(alpha_pos[task_id] for task_id in cluster_ids) / len(cluster_ids)
+        insert_idx = max(0, min(len(base_ids), round(target_center) - (len(cluster_ids) // 2)))
+        child_ids = base_ids[:insert_idx] + cluster_ids + base_ids[insert_idx:]
+        return [wolf_task_map[task_id] for task_id in child_ids]
+
+    def _destroy_repair_sequence(self, task_seq, focus_ids=None, remove_count=2):
+        """Remove a few high-risk tasks and greedily repair the sequence."""
+        if len(task_seq) <= remove_count:
+            return None
+
+        focus_ids = set() if focus_ids is None else set(focus_ids)
+        ranked_indices = sorted(
+            range(len(task_seq)),
+            key=lambda idx: self._task_risk_score(task_seq, idx, focus_ids),
+            reverse=True,
+        )
+        remove_indices = sorted(ranked_indices[:remove_count], reverse=True)
+        remaining = self._copy_wolf_tasks(task_seq)
+        removed_tasks = []
+
+        for idx in remove_indices:
+            removed_tasks.append(remaining.pop(idx))
+
+        rebuilt = remaining
+        for task in removed_tasks:
+            candidate = self._best_insert_position(rebuilt, task)
+            if candidate is None:
+                return None
+            rebuilt = candidate
+
+        return rebuilt
+
     def _decode_sequence_to_agvs(self, task_seq):
         """Decode by capacity only. Kept as a simple fallback decoder."""
         if not task_seq:
@@ -263,33 +442,64 @@ class WPAOperators:
         return new_seq
 
     def scouting(self, wolf):
-        """Improved scouting: multi-direction discrete probing with择优接受."""
+        """Improved scouting: bottleneck-guided multi-direction discrete probing."""
         current_seq = self._flatten_tasks(wolf)
         if len(current_seq) < 2:
             return wolf
 
+        focus_ids = self._bottleneck_task_ids(wolf)
+        use_heavy_structure = wolf.vehicle_num >= 5
+        candidates = []
+
+        if use_heavy_structure:
+            guided_reinsert = self._guided_reinsert_by_risk(current_seq, focus_ids=focus_ids, top_k=3)
+            if guided_reinsert is not None:
+                candidates.append(("bottleneck-reinsert", guided_reinsert))
+
+            pull_forward = self._pull_forward_high_risk_task(current_seq, focus_ids=focus_ids, step_cap=3)
+            if pull_forward is not None:
+                candidates.append(("deadline-pull", pull_forward))
+
+            cross_swap = self._swap_across_regions(current_seq, focus_ids=focus_ids)
+            if cross_swap is not None:
+                candidates.append(("cross-region-swap", cross_swap))
+
+        random_swap = self._neighbor_by_operator(current_seq, "swap")
+        if random_swap is not None:
+            candidates.append(("random-swap", random_swap))
+
+        random_insert = self._neighbor_by_operator(current_seq, "insert")
+        if random_insert is not None:
+            candidates.append(("random-insert", random_insert))
+
+        reverse_seq = self._neighbor_by_operator(current_seq, "reverse")
+        if reverse_seq is not None:
+            candidates.append(("reverse", reverse_seq))
+
         candidate_best = None
-        for operator_name in ["swap", "insert", "reverse"]:
-            candidate_seq = self._neighbor_by_operator(current_seq, operator_name)
-            if candidate_seq is None:
-                continue
+        candidate_name = None
+        for name, candidate_seq in candidates:
             candidate_wolf = self._rebuild_from_task_sequence(wolf, candidate_seq, decoder="cost_based")
             if candidate_wolf is None:
                 continue
             if (candidate_best is None) or (candidate_wolf.fitness < candidate_best.fitness):
                 candidate_best = candidate_wolf
+                candidate_name = name
 
         if candidate_best is not None and candidate_best.fitness < wolf.fitness:
-            print(f"  [scout improved] F {wolf.fitness:.1f} -> {candidate_best.fitness:.1f}")
+            print(
+                f"  [scout improved] F {wolf.fitness:.1f} -> {candidate_best.fitness:.1f} "
+                f"({candidate_name})"
+            )
             return candidate_best
         return wolf
 
     def summoning(self, wolf, alpha_wolf):
-        """Improved summoning: short OX inheritance plus soft leader alignment."""
+        """Improved summoning: cluster inheritance with cost-based structural decoding."""
         alpha_copy = copy.deepcopy(alpha_wolf)
         if not alpha_copy.agv_list or not wolf.agv_list:
             return wolf
-        if random.random() > 0.75:
+        if random.random() > 0.8:
             return wolf
 
         alpha_tasks = self._flatten_tasks(alpha_copy)
@@ -297,15 +507,34 @@ class WPAOperators:
         if len(alpha_tasks) < 2 or len(wolf_tasks) < 2:
             return wolf
 
+        use_heavy_structure = wolf.vehicle_num >= 4
+        alpha_cluster = self._choose_alpha_cluster(alpha_copy, seg_len_min=2, seg_len_max=4) if use_heavy_structure else None
+        focus_ids = {task.id for task in alpha_cluster} if alpha_cluster else set()
         candidates = []
 
         ox_seq = self._ox_inherit(wolf_tasks, alpha_tasks, seg_len_min=2, seg_len_max=3)
         if ox_seq is not None:
             candidates.append(("ox", ox_seq))
 
+        if use_heavy_structure:
+            cluster_seq = self._inherit_cluster_sequence(wolf_tasks, alpha_tasks, alpha_cluster)
+            if cluster_seq is not None:
+                candidates.append(("cluster-inherit", cluster_seq))
+        else:
+            cluster_seq = None
+
         align_seq = self._soft_align_to_alpha(wolf_tasks, alpha_tasks, steps=2)
         if align_seq is not None:
             candidates.append(("align", align_seq))
+
+        if cluster_seq is not None:
+            cluster_align_seq = self._soft_align_to_alpha(cluster_seq, alpha_tasks, steps=2)
+            if cluster_align_seq is not None:
+                candidates.append(("cluster+align", cluster_align_seq))
+
+            cluster_repair_seq = self._guided_reinsert_by_risk(cluster_seq, focus_ids=focus_ids, top_k=2)
+            if cluster_repair_seq is not None:
+                candidates.append(("cluster+repair", cluster_repair_seq))
 
         if ox_seq is not None:
             ox_align_seq = self._soft_align_to_alpha(ox_seq, alpha_tasks, steps=1)
@@ -338,30 +567,57 @@ class WPAOperators:
         return abs(step[0])
 
     def besieging(self, wolf, alpha_wolf, curr_iter, max_iter):
-        """Improved besieging: constrained Levy-guided local/global refinement."""
+        """Improved besieging: Levy-driven dual-mode local refinement and destroy-repair."""
         current_seq = self._flatten_tasks(wolf)
         alpha_seq = self._flatten_tasks(alpha_wolf)
         if len(current_seq) < 2 or len(current_seq) != len(alpha_seq):
             return wolf
-        if random.random() > 0.8:
+        if random.random() > 0.85:
             return wolf
 
         step_scale = 2.0 * (1 - curr_iter / max_iter)
         levy_step = self._levy_flight_step(step_scale=step_scale)
-        step_threshold = 1.0
+        step_threshold = 1.15
+        focus_ids = self._bottleneck_task_ids(wolf)
+        use_heavy_structure = wolf.vehicle_num >= 5
 
         candidates = []
         if levy_step < step_threshold:
             align_seq = self._soft_align_to_alpha(current_seq, alpha_seq, steps=1)
             if align_seq is not None:
                 candidates.append(("local-align", align_seq))
-            swap_seq = self._neighbor_by_operator(current_seq, random.choice(["swap", "insert"]))
-            if swap_seq is not None:
-                candidates.append(("local-neighbor", swap_seq))
+
+            if use_heavy_structure:
+                local_reinsert = self._guided_reinsert_by_risk(current_seq, focus_ids=focus_ids, top_k=2)
+                if local_reinsert is not None:
+                    candidates.append(("local-reinsert", local_reinsert))
+
+                pull_forward = self._pull_forward_high_risk_task(current_seq, focus_ids=focus_ids, step_cap=2)
+                if pull_forward is not None:
+                    candidates.append(("local-pull", pull_forward))
+
+            local_neighbor = self._neighbor_by_operator(current_seq, random.choice(["swap", "insert"]))
+            if local_neighbor is not None:
+                candidates.append(("local-neighbor", local_neighbor))
         else:
             align_seq = self._soft_align_to_alpha(current_seq, alpha_seq, steps=2)
             if align_seq is not None:
                 candidates.append(("global-align", align_seq))
+
+            if use_heavy_structure:
+                repair_seq = self._destroy_repair_sequence(current_seq, focus_ids=focus_ids, remove_count=2)
+                if repair_seq is not None:
+                    candidates.append(("destroy-repair-2", repair_seq))
+
+                if curr_iter >= max_iter // 3:
+                    repair_heavy_seq = self._destroy_repair_sequence(
+                        current_seq,
+                        focus_ids=focus_ids,
+                        remove_count=3,
+                    )
+                    if repair_heavy_seq is not None:
+                        candidates.append(("destroy-repair-3", repair_heavy_seq))
+
             reverse_seq = self._short_reverse(current_seq, seg_len_max=4)
             if reverse_seq is not None:
                 candidates.append(("bounded-reverse", reverse_seq))
