@@ -23,9 +23,10 @@ env/
 build/
 dist/
 *.egg-info/
+frontend/data/result.json
+test_result.txt
 
 # Thesis docs
 *.docx
 *.pdf
 周汇报.md
-

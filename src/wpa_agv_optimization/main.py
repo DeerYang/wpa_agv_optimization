@@ -1,4 +1,4 @@
-﻿"""Package entry point and reusable execution helpers for the AGV WPA project."""
+"""Package entry point and reusable execution helpers for the AGV WPA project."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import numpy as np
 
 from .config import Config
 from .evaluator import WolfEvaluator
+from .exporter import export_result_json
 from .initializer import PopulationInitializer
 from .models import Task
 from .scenario_inputs import SCENARIO_LIBRARY
@@ -261,6 +262,8 @@ def _run_algorithm_impl(scenario: int | None, seed: int | None, algorithm: str, 
     operators = WPAOperators(evaluator)
     global_best_wolf = alpha_wolf
 
+    convergence = []
+
     print(f"\n=== 3. 开始狼群算法迭代，算法版本={algorithm}，最大迭代次数={max_iter} ===")
     for iter_idx in range(max_iter):
         print(f"\n--- 第 {iter_idx + 1}/{max_iter} 代迭代开始 ---")
@@ -274,6 +277,8 @@ def _run_algorithm_impl(scenario: int | None, seed: int | None, algorithm: str, 
             )
 
         current_alpha = population[0]
+        convergence.append({"iter": iter_idx + 1, "best_fitness": round(float(global_best_wolf.fitness), 2)})
+
         print(f"--- 第 {iter_idx + 1}/{max_iter} 代迭代结束 ---")
         print(f"    当前代最优F={current_alpha.fitness:.2f} | 全局最优F={global_best_wolf.fitness:.2f}")
         print(
@@ -300,6 +305,17 @@ def _run_algorithm_impl(scenario: int | None, seed: int | None, algorithm: str, 
             f"    AGV-{agv.id}：任务数={len(agv.tasks)} | 最终载重={agv.load}kg | 完成时间={agv.finish_time}秒"
         )
         print(f"      任务执行顺序：{agv.tasks}")
+
+    json_path = export_result_json(
+        wolf=global_best_wolf,
+        grid_map=grid_map,
+        task_list=task_list,
+        convergence=convergence,
+        scenario_name=scenario_name,
+        algorithm=algorithm,
+        seed=seed,
+    )
+    print(f"\n  前端可视化数据已导出到: {json_path}")
 
     return RunResult(
         algorithm=algorithm,
