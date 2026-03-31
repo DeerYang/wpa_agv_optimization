@@ -64,6 +64,30 @@ class WolfEvaluator:
                 blocks.add((x, y, extra_t))
         return blocks
 
+    @staticmethod
+    def _reserve_wait_window(
+        agv_id: int,
+        pos: Node,
+        start_time: int,
+        end_time: int,
+        reservation_table: Set[TimedNode],
+        reservation_owner: Dict[TimedNode, int],
+    ) -> None:
+        """
+        把冲突重试阶段产生的原地等待写入时空占用表。
+
+        这段等待原来只体现在 curr_time 的推进上，没有进入 reservation_table，
+        会导致后续车辆被错误地规划到同一时间、同一节点。
+        """
+        if end_time <= start_time:
+            return
+
+        x, y = pos
+        for wait_time in range(start_time + 1, end_time + 1):
+            wait_node = (x, y, wait_time)
+            reservation_table.add(wait_node)
+            reservation_owner[wait_node] = agv_id
+
     def _detect_conflict_event(
         self,
         agv,
@@ -116,6 +140,36 @@ class WolfEvaluator:
 
         return None
 
+    def _detect_service_window_conflict(
+        self,
+        agv,
+        last_node: TimedNode,
+        reservation_table: Set[TimedNode],
+        reservation_owner: Dict[TimedNode, int],
+        agv_map: Dict[int, object],
+    ) -> Optional[Dict[str, object]]:
+        """
+        检查到达目标点后的服务占点是否与已有时空占用冲突。
+
+        之前这里是直接把 SERVICE_TIME 对应的等待节点写入 reservation_table，
+        如果别的车辆更早被重建并已经占用了这些时刻，就会把真实冲突静默覆盖掉。
+        """
+        x, y, arrive_time = last_node
+        for extra_wait in range(1, Config.SERVICE_TIME + 1):
+            time_step = arrive_time + extra_wait
+            wait_node = (x, y, time_step)
+            if wait_node in reservation_table:
+                holder_id = reservation_owner.get(wait_node)
+                if holder_id is not None and holder_id in agv_map and holder_id != agv.id:
+                    return {
+                        "kind": "node",
+                        "time": time_step,
+                        "holder_id": holder_id,
+                        "node": (x, y),
+                        "edge": None,
+                    }
+        return None
+
     def rebuild_wolf(self, wolf):
         """重建并评估狼个体。"""
         reservation_table: Set[TimedNode] = set()
@@ -158,6 +212,7 @@ class WolfEvaluator:
                 temporary_blocks: Set[TimedNode] = set()
 
                 while retries <= max_retries:
+                    plan_start_time = curr_time
                     segment_path = self.planner.plan(
                         curr_pos,
                         target_pos,
@@ -171,6 +226,14 @@ class WolfEvaluator:
                         replan_count += 1
                         wait_counts[agv.id] += 1
                         curr_time += 1
+                        self._reserve_wait_window(
+                            agv_id=agv.id,
+                            pos=curr_pos,
+                            start_time=plan_start_time,
+                            end_time=curr_time,
+                            reservation_table=reservation_table,
+                            reservation_owner=reservation_owner,
+                        )
                         retries += 1
                         continue
 
@@ -184,7 +247,16 @@ class WolfEvaluator:
                         agv_map=agv_map,
                     )
                     if conflict is None:
-                        break
+                        service_conflict = self._detect_service_window_conflict(
+                            agv=agv,
+                            last_node=segment_path[-1],
+                            reservation_table=reservation_table,
+                            reservation_owner=reservation_owner,
+                            agv_map=agv_map,
+                        )
+                        if service_conflict is None:
+                            break
+                        conflict = service_conflict
 
                     holder_id = int(conflict["holder_id"])
                     holder_agv = agv_map[holder_id]
@@ -245,6 +317,15 @@ class WolfEvaluator:
                         curr_time += 2
                     else:
                         curr_time += 1
+
+                    self._reserve_wait_window(
+                        agv_id=agv.id,
+                        pos=curr_pos,
+                        start_time=plan_start_time,
+                        end_time=curr_time,
+                        reservation_table=reservation_table,
+                        reservation_owner=reservation_owner,
+                    )
 
                     retries += 1
 
