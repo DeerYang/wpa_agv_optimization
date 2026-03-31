@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>多AGV调度优化 — 可视化回放系统</title>
   <meta name="description" content="基于狼群算法的多AGV任务分配与路径规划可视化回放系统" />
+  <link rel="icon" href="data:," />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -26,12 +27,15 @@
       <h1>多AGV调度优化 <span class="subtitle">可视化回放</span></h1>
     </div>
     <div class="header-right">
-      <label class="file-btn" for="json-file-input">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M3 1a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6l-5-5H3zm0 1h6v4h4v7a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1zm7 .7L13.3 6H10V2.7z"/></svg>
-        加载 JSON
-      </label>
-      <input type="file" id="json-file-input" accept=".json" style="display:none" />
-      <button id="btn-load-demo" class="demo-btn" title="加载内置示例数据">示例数据</button>
+      <div class="sample-picker">
+        <label for="sample-select" class="sr-only">选择数据来源</label>
+        <select id="sample-select" aria-label="选择数据来源">
+          <option value="latest" selected>最后运行结果</option>
+          <option value="1">示例场景 1</option>
+          <option value="2">示例场景 2</option>
+          <option value="3">示例场景 3</option>
+        </select>
+      </div>
       <span id="scenario-badge" class="badge hidden"></span>
     </div>
   </header>
@@ -61,8 +65,8 @@
           <button id="btn-step-fwd" class="ctrl-btn" title="前进一步">⏭</button>
           <button id="btn-reset" class="ctrl-btn" title="重置">⟲</button>
           <div class="separator"></div>
-          <label class="speed-label">速度</label>
-          <select id="speed-select">
+          <label class="speed-label" for="speed-select">速度</label>
+          <select id="speed-select" aria-label="播放速度">
             <option value="2000">0.5x</option>
             <option value="1000" selected>1x</option>
             <option value="500">2x</option>
@@ -72,24 +76,80 @@
         </div>
         <div class="progress-row">
           <span id="time-display" class="time-display">t = 0</span>
-          <input type="range" id="progress-bar" min="0" max="100" value="0" />
+          <label for="progress-bar" class="sr-only">时间步进度</label>
+          <input type="range" id="progress-bar" min="0" max="100" value="0" aria-label="时间步进度" />
           <span id="time-max" class="time-display">/ 0</span>
+        </div>
+        <div class="toggle-row">
+          <label class="toggle-pill">
+            <input type="checkbox" id="toggle-task-labels" checked aria-label="显示任务编号" />
+            <span>任务编号</span>
+          </label>
+          <label class="toggle-pill">
+            <input type="checkbox" id="toggle-trails" checked aria-label="显示历史轨迹" />
+            <span>历史轨迹</span>
+          </label>
+          <label class="toggle-pill">
+            <input type="checkbox" id="toggle-isolate-focus" aria-label="仅显示焦点 AGV" />
+            <span>仅看焦点 AGV</span>
+          </label>
+          <button id="btn-clear-focus" class="ghost-btn">清除焦点</button>
         </div>
       </div>
     </section>
 
     <!-- Right: Info & Chart -->
     <aside id="info-section">
-      <!-- Fitness Summary -->
-      <div class="info-card" id="fitness-card">
-        <h3>方案指标</h3>
-        <div class="metric-grid">
-          <div class="metric"><span class="metric-label">适应度 F</span><span id="m-F" class="metric-value">—</span></div>
-          <div class="metric"><span class="metric-label">车辆数 N</span><span id="m-N" class="metric-value">—</span></div>
-          <div class="metric"><span class="metric-label">总距离 D</span><span id="m-D" class="metric-value">—</span></div>
-          <div class="metric"><span class="metric-label">时间罚 T</span><span id="m-T" class="metric-value">—</span></div>
-          <div class="metric"><span class="metric-label">冲突数</span><span id="m-conflict" class="metric-value">—</span></div>
-          <div class="metric"><span class="metric-label">重规划</span><span id="m-replan" class="metric-value">—</span></div>
+      <div class="info-card" id="overview-card">
+        <div class="card-head">
+          <h3>运行概览</h3>
+          <span id="focus-badge" class="card-pill">全部 AGV</span>
+        </div>
+        <div class="overview-grid">
+          <section class="overview-block">
+            <h4>运行摘要</h4>
+            <div class="run-meta">
+              <div>
+                <span class="meta-label">场景</span>
+                <span id="run-scenario" class="meta-value">—</span>
+              </div>
+              <div>
+                <span class="meta-label">算法</span>
+                <span id="run-algorithm" class="meta-value">—</span>
+              </div>
+              <div>
+                <span class="meta-label">种子</span>
+                <span id="run-seed" class="meta-value">—</span>
+              </div>
+              <div>
+                <span class="meta-label">来源</span>
+                <span id="run-source" class="meta-value">—</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="overview-block">
+            <h4>时刻摘要</h4>
+            <div class="metric-grid compact-grid">
+              <div class="metric"><span class="metric-label">任务总数</span><span id="m-total-tasks" class="metric-value">—</span></div>
+              <div class="metric"><span class="metric-label">完成率</span><span id="m-completion-rate" class="metric-value">—</span></div>
+              <div class="metric"><span class="metric-label">活跃 AGV</span><span id="m-active-agv" class="metric-value">—</span></div>
+              <div class="metric"><span class="metric-label">已完成 AGV</span><span id="m-finished-agv" class="metric-value">—</span></div>
+            </div>
+            <div id="focus-detail" class="focus-detail">未选择焦点 AGV。</div>
+          </section>
+
+          <section class="overview-block">
+            <h4>方案指标</h4>
+            <div class="metric-grid">
+              <div class="metric"><span class="metric-label">适应度 F</span><span id="m-F" class="metric-value">—</span></div>
+              <div class="metric"><span class="metric-label">车辆数 N</span><span id="m-N" class="metric-value">—</span></div>
+              <div class="metric"><span class="metric-label">总距离 D</span><span id="m-D" class="metric-value">—</span></div>
+              <div class="metric"><span class="metric-label">时间罚 T</span><span id="m-T" class="metric-value">—</span></div>
+              <div class="metric"><span class="metric-label">冲突数</span><span id="m-conflict" class="metric-value">—</span></div>
+              <div class="metric"><span class="metric-label">重规划</span><span id="m-replan" class="metric-value">—</span></div>
+            </div>
+          </section>
         </div>
       </div>
 
@@ -102,26 +162,41 @@
               <tr>
                 <th>AGV</th>
                 <th>位置</th>
+                <th>当前目标</th>
                 <th>任务</th>
                 <th>载重</th>
                 <th>状态</th>
               </tr>
             </thead>
             <tbody id="agv-table-body">
-              <tr><td colspan="5" class="empty-hint">请先加载数据</td></tr>
+              <tr><td colspan="6" class="empty-hint">请先加载数据</td></tr>
             </tbody>
           </table>
         </div>
       </div>
 
+      <div class="info-card" id="event-card">
+        <div class="card-head">
+          <h3>事件时间轴</h3>
+          <span id="event-stats" class="card-pill">0 条事件</span>
+        </div>
+        <div id="event-timeline" class="timeline-list">
+          <div class="empty-hint timeline-empty">请先加载数据</div>
+        </div>
+      </div>
+
       <!-- Convergence Chart -->
       <div class="info-card" id="chart-card">
-        <h3>收敛曲线</h3>
+        <div class="card-head">
+          <h3>收敛曲线</h3>
+          <span id="chart-caption" class="card-pill">最优值 —</span>
+        </div>
         <canvas id="chart-canvas"></canvas>
       </div>
     </aside>
   </main>
 
+  <script src="analysis.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
