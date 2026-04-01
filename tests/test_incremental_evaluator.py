@@ -187,6 +187,61 @@ class IncrementalEvaluatorTests(unittest.TestCase):
         self.assertNotIn((3, 10, 13), agv_reserved_nodes)
         self.assertIn((3, 10, 12), agv_reserved_nodes)
 
+    def test_original_summoning_uses_shared_prepare_pipeline(self) -> None:
+        operators = WPAOperators(evaluator=None)
+        wolf = _build_wolf([[self.tasks[0], self.tasks[1], self.tasks[2]]])
+        alpha = _build_wolf([[self.tasks[2], self.tasks[0], self.tasks[1]]])
+        wolf.fitness = 100.0
+        alpha.fitness = 80.0
+        better = copy.deepcopy(wolf)
+        better.fitness = 90.0
+        prepared_calls = []
+
+        def fake_prepare(name, task_seq, decoder="cost_based", base_wolf=None):
+            prepared_calls.append((name, decoder, base_wolf is wolf, [task.id for task in task_seq]))
+            return (name, object(), 10.0)
+
+        def fake_evaluate(prepared_candidates, strict_eval, top_k=2):
+            return better
+
+        with mock.patch.object(operators, "_prepare_candidate", side_effect=fake_prepare), \
+             mock.patch.object(operators, "_evaluate_prepared_candidates", side_effect=fake_evaluate), \
+             mock.patch.object(operators, "_rebuild_from_task_sequence", side_effect=AssertionError("legacy rebuild path should not be used")):
+            result = operators.original_summoning(wolf, alpha)
+
+        self.assertIs(result, better)
+        self.assertEqual(len(prepared_calls), 1)
+        self.assertEqual(prepared_calls[0][1], "stable")
+        self.assertTrue(prepared_calls[0][2])
+
+    def test_original_besieging_uses_shared_prepare_pipeline(self) -> None:
+        operators = WPAOperators(evaluator=None)
+        wolf = _build_wolf([[self.tasks[0], self.tasks[1], self.tasks[2]]])
+        alpha = _build_wolf([[self.tasks[0], self.tasks[2], self.tasks[1]]])
+        wolf.fitness = 100.0
+        alpha.fitness = 80.0
+        better = copy.deepcopy(wolf)
+        better.fitness = 90.0
+        prepared_calls = []
+
+        def fake_prepare(name, task_seq, decoder="cost_based", base_wolf=None):
+            prepared_calls.append((name, decoder, base_wolf is wolf, [task.id for task in task_seq]))
+            return (name, object(), 10.0)
+
+        def fake_evaluate(prepared_candidates, strict_eval, top_k=2):
+            return better
+
+        with mock.patch.object(operators, "_prepare_candidate", side_effect=fake_prepare), \
+             mock.patch.object(operators, "_evaluate_prepared_candidates", side_effect=fake_evaluate), \
+             mock.patch.object(operators, "_rebuild_from_task_sequence", side_effect=AssertionError("legacy rebuild path should not be used")), \
+             mock.patch("random.sample", return_value=[0, 1]):
+            result = operators.original_besieging(wolf, alpha)
+
+        self.assertIs(result, better)
+        self.assertEqual(len(prepared_calls), 1)
+        self.assertEqual(prepared_calls[0][1], "stable")
+        self.assertTrue(prepared_calls[0][2])
+
 
 if __name__ == "__main__":
     unittest.main()

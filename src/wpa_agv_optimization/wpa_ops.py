@@ -459,6 +459,22 @@ class WPAOperators:
         _, decoded_agvs, _ = prepared
         return self._strict_candidate_from_agvs(base_wolf, "candidate", decoded_agvs)
 
+    def _evaluate_task_sequence_candidates(self, base_wolf, candidates, *, top_k=None, decoder="stable"):
+        """Run shared prepare+strict-eval pipeline for task-sequence candidates."""
+        prepared_candidates = []
+        for name, task_seq in candidates:
+            prepared = self._prepare_candidate(name, task_seq, decoder=decoder, base_wolf=base_wolf)
+            if prepared is not None:
+                prepared_candidates.append(prepared)
+
+        return self._evaluate_prepared_candidates(
+            prepared_candidates=prepared_candidates,
+            strict_eval=lambda name, decoded_agvs: self._strict_candidate_from_agvs(
+                base_wolf, name, decoded_agvs
+            ),
+            top_k=top_k,
+        )
+
     def _neighbor_by_operator(self, task_seq, operator_name):
         """Generate one neighbor sequence with a simple discrete move."""
         if len(task_seq) < 2:
@@ -782,18 +798,21 @@ class WPAOperators:
 
         for _ in range(max_walks):
             h = random.randint(4, 8)
-            candidate_best = None
+            candidate_pool = []
 
             for _ in range(h):
                 operator_name = random.choice(["swap", "insert"])
                 candidate_seq = self._neighbor_by_operator(current_seq, operator_name)
                 if candidate_seq is None:
                     continue
-                candidate_wolf = self._rebuild_from_task_sequence(current_best, candidate_seq, decoder="simple")
-                if candidate_wolf is None:
-                    continue
-                if (candidate_best is None) or (candidate_wolf.fitness < candidate_best.fitness):
-                    candidate_best = candidate_wolf
+                candidate_pool.append((f"original-scout-{operator_name}", candidate_seq))
+
+            candidate_best = self._evaluate_task_sequence_candidates(
+                current_best,
+                candidate_pool,
+                top_k=None,
+                decoder="stable",
+            )
 
             if candidate_best is None or candidate_best.fitness >= current_best.fitness:
                 break
@@ -840,7 +859,12 @@ class WPAOperators:
         item = new_seq.pop(current_idx)
         new_seq.insert(next_idx, item)
 
-        candidate_wolf = self._rebuild_from_task_sequence(wolf, new_seq, decoder="simple")
+        candidate_wolf = self._evaluate_task_sequence_candidates(
+            wolf,
+            [("original-summon", new_seq)],
+            top_k=None,
+            decoder="stable",
+        )
         if candidate_wolf is not None and candidate_wolf.fitness < wolf.fitness:
             return candidate_wolf
         return wolf
@@ -875,7 +899,12 @@ class WPAOperators:
                 i = j - 1
 
         base_seq[i], base_seq[j] = base_seq[j], base_seq[i]
-        candidate_wolf = self._rebuild_from_task_sequence(wolf, base_seq, decoder="simple")
+        candidate_wolf = self._evaluate_task_sequence_candidates(
+            wolf,
+            [("original-besiege", base_seq)],
+            top_k=None,
+            decoder="stable",
+        )
         if candidate_wolf is not None and candidate_wolf.fitness < wolf.fitness:
             return candidate_wolf
         return wolf
