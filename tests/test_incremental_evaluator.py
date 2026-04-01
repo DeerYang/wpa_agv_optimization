@@ -165,6 +165,28 @@ class IncrementalEvaluatorTests(unittest.TestCase):
         state = evaluator._build_initial_state(candidate, base_wolf=base_result)
         self.assertEqual(state["start_idx"], 1)
 
+    def test_reserve_wait_window_stops_before_foreign_reservation(self) -> None:
+        reservation_table = {(3, 10, 13)}
+        reservation_owner = {(3, 10, 13): 0}
+        agv_reserved_nodes = set()
+
+        actual_end_time, conflict = WolfEvaluator._reserve_wait_window(
+            agv_id=6,
+            pos=(3, 10),
+            start_time=7,
+            end_time=15,
+            reservation_table=reservation_table,
+            reservation_owner=reservation_owner,
+            agv_reserved_nodes=agv_reserved_nodes,
+        )
+
+        self.assertEqual(actual_end_time, 12)
+        self.assertEqual(conflict["holder_id"], 0)
+        self.assertEqual(conflict["time"], 13)
+        self.assertEqual(reservation_owner[(3, 10, 13)], 0)
+        self.assertNotIn((3, 10, 13), agv_reserved_nodes)
+        self.assertIn((3, 10, 12), agv_reserved_nodes)
+
 
 if __name__ == "__main__":
     unittest.main()

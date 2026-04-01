@@ -79,23 +79,38 @@ class WolfEvaluator:
         reservation_table: Set[TimedNode],
         reservation_owner: Dict[TimedNode, int],
         agv_reserved_nodes: Optional[Set[TimedNode]] = None,
-    ) -> None:
+    ) -> Tuple[int, Optional[Dict[str, object]]]:
         """
         把冲突重试阶段产生的原地等待写入时空占用表。
 
-        这段等待原来只体现在 curr_time 的推进上，没有进入 reservation_table，
-        会导致后续车辆被错误地规划到同一时间、同一节点。
+        如果等待区间中途撞上了别的车辆已经占用的时空节点，
+        就在冲突发生前停下并把冲突详情返回给调用方，
+        防止等待窗口把已有占位静默覆盖掉。
         """
         if end_time <= start_time:
-            return
+            return start_time, None
 
         x, y = pos
+        actual_end_time = start_time
         for wait_time in range(start_time + 1, end_time + 1):
             wait_node = (x, y, wait_time)
+            holder_id = reservation_owner.get(wait_node)
+            if holder_id is not None and holder_id != agv_id:
+                return actual_end_time, {
+                    "kind": "node",
+                    "time": wait_time,
+                    "holder_id": holder_id,
+                    "node": (x, y),
+                    "edge": None,
+                }
+
             reservation_table.add(wait_node)
             reservation_owner[wait_node] = agv_id
             if agv_reserved_nodes is not None:
                 agv_reserved_nodes.add(wait_node)
+            actual_end_time = wait_time
+
+        return actual_end_time, None
 
     @staticmethod
     def _copy_cached_agv_state(target_agv, base_agv) -> None:
@@ -321,7 +336,7 @@ class WolfEvaluator:
                         agv_replan_count += 1
                         wait_counts[agv.id] += 1
                         curr_time += 1
-                        self._reserve_wait_window(
+                        curr_time, wait_conflict = self._reserve_wait_window(
                             agv_id=agv.id,
                             pos=curr_pos,
                             start_time=plan_start_time,
@@ -330,6 +345,8 @@ class WolfEvaluator:
                             reservation_owner=reservation_owner,
                             agv_reserved_nodes=agv_reserved_nodes,
                         )
+                        if wait_conflict is not None:
+                            temporary_blocks |= self._temporary_blocks_for_conflict(wait_conflict)
                         retries += 1
                         continue
 
@@ -414,7 +431,7 @@ class WolfEvaluator:
                     else:
                         curr_time += 1
 
-                    self._reserve_wait_window(
+                    curr_time, wait_conflict = self._reserve_wait_window(
                         agv_id=agv.id,
                         pos=curr_pos,
                         start_time=plan_start_time,
@@ -423,6 +440,8 @@ class WolfEvaluator:
                         reservation_owner=reservation_owner,
                         agv_reserved_nodes=agv_reserved_nodes,
                     )
+                    if wait_conflict is not None:
+                        temporary_blocks |= self._temporary_blocks_for_conflict(wait_conflict)
 
                     retries += 1
 
@@ -506,3 +525,4 @@ class WolfEvaluator:
         wolf.reroute_count = reroute_count
         wolf._cache_ready = True
         return wolf
+
