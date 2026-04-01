@@ -16,7 +16,7 @@ import numpy as np
 from scipy.special import gamma
 
 from .config import Config
-from .models import AGV
+from .models import AGV, Wolf
 from .utils import manhattan_dist
 
 
@@ -331,17 +331,133 @@ class WPAOperators:
 
         return agv_list
 
-    def _rebuild_from_task_sequence(self, base_wolf, task_seq, decoder="cost_based"):
-        """Decode, rebuild routes, and return a new evaluated wolf."""
-        new_wolf = copy.deepcopy(base_wolf)
+    def _decode_sequence_to_agvs_stable(self, task_seq, base_wolf=None):
+        """Decode by preserving base AGV segment boundaries whenever feasible."""
+        if not task_seq:
+            return []
+        if base_wolf is None or not getattr(base_wolf, "agv_list", None):
+            return self._decode_sequence_to_agvs_cost_based(task_seq)
+
+        base_agvs = [agv for agv in base_wolf.agv_list if agv.tasks]
+        if not base_agvs:
+            return self._decode_sequence_to_agvs_cost_based(task_seq)
+        if sum(len(agv.tasks) for agv in base_agvs) != len(task_seq):
+            return self._decode_sequence_to_agvs_cost_based(task_seq)
+
+        decoded = []
+        offset = 0
+        total_segments = len(base_agvs)
+
+        for idx, base_agv in enumerate(base_agvs):
+            remaining_tasks = len(task_seq) - offset
+            remaining_segments = total_segments - idx
+            if remaining_tasks <= 0:
+                break
+
+            min_take = remaining_tasks if remaining_segments == 1 else 1
+            max_take = remaining_tasks - max(0, remaining_segments - 1)
+            take = min(len(base_agv.tasks), max_take)
+            take = max(min_take, take)
+
+            segment = list(task_seq[offset : offset + take])
+            segment_load = sum(task.weight for task in segment)
+            while segment_load > Config.AGV_CAPACITY and take > min_take:
+                take -= 1
+                segment = list(task_seq[offset : offset + take])
+                segment_load = sum(task.weight for task in segment)
+
+            if segment_load > Config.AGV_CAPACITY:
+                return self._decode_sequence_to_agvs_cost_based(task_seq)
+
+            new_agv = AGV(agv_id=base_agv.id, start_pos=base_agv.start_pos)
+            new_agv.tasks = segment
+            new_agv.load = segment_load
+            decoded.append(new_agv)
+            offset += take
+
+        if offset != len(task_seq):
+            return self._decode_sequence_to_agvs_cost_based(task_seq)
+
+        return decoded
+
+    def _approximate_candidate_score(self, decoded_agvs):
+        """Cheap score used to rank candidates before strict evaluation."""
+        active_agvs = [agv for agv in decoded_agvs if agv.tasks]
+        route_cost = sum(self._estimate_route_cost(agv.tasks, agv.start_pos) for agv in active_agvs)
+        vehicle_cost = Config.W2_NUM * len(active_agvs)
+        return route_cost + vehicle_cost
+
+    def _prepare_candidate(self, name, task_seq, decoder="cost_based", base_wolf=None):
+        """Decode one candidate and attach a cheap approximate score."""
         if decoder == "simple":
             decoded_agvs = self._decode_sequence_to_agvs(task_seq)
+        elif decoder == "stable":
+            decoded_agvs = self._decode_sequence_to_agvs_stable(task_seq, base_wolf=base_wolf)
         else:
             decoded_agvs = self._decode_sequence_to_agvs_cost_based(task_seq)
         if decoded_agvs is None:
             return None
+        return (name, decoded_agvs, self._approximate_candidate_score(decoded_agvs))
+
+    @staticmethod
+    def _result_fitness(result):
+        """Read one strict evaluation result's numeric fitness."""
+        if result is None:
+            return None
+        if isinstance(result, dict):
+            return float(result["fitness"])
+        return float(result.fitness)
+
+    def _adaptive_strict_budget(self, prepared_candidates, fallback_top_k=2, close_gap=8.0):
+        """Use fewer strict evaluations when the approximate winner is clearly ahead."""
+        if not prepared_candidates:
+            return 0
+        ordered = sorted(prepared_candidates, key=lambda item: item[2])
+        if len(ordered) == 1:
+            return 1
+        if ordered[1][2] - ordered[0][2] >= close_gap:
+            return 1
+        return min(fallback_top_k, len(ordered))
+
+    def _evaluate_prepared_candidates(self, prepared_candidates, strict_eval, top_k=2):
+        """Strictly evaluate only the best-looking prepared candidates."""
+        if not prepared_candidates:
+            return None
+
+        if top_k is None:
+            limit = self._adaptive_strict_budget(prepared_candidates)
+        else:
+            limit = max(1, min(top_k, len(prepared_candidates)))
+        candidate_best = None
+        candidate_best_fitness = None
+
+        for name, payload, _ in sorted(prepared_candidates, key=lambda item: item[2])[:limit]:
+            result = strict_eval(name, payload)
+            fitness = self._result_fitness(result)
+            if fitness is None:
+                continue
+            if candidate_best is None or fitness < candidate_best_fitness:
+                candidate_best = result
+                candidate_best_fitness = fitness
+
+        return candidate_best
+
+    def _strict_candidate_from_agvs(self, base_wolf, candidate_name, decoded_agvs):
+        """Run the strict evaluator on one decoded candidate."""
+        new_wolf = Wolf()
         new_wolf.agv_list = decoded_agvs
-        return self.evaluator.rebuild_wolf(new_wolf)
+        candidate = self.evaluator.rebuild_wolf(new_wolf, base_wolf=base_wolf)
+        if candidate is not None:
+            setattr(candidate, "_candidate_name", candidate_name)
+        return candidate
+
+    def _rebuild_from_task_sequence(self, base_wolf, task_seq, decoder="cost_based"):
+        """Decode, rebuild routes, and return a new evaluated wolf."""
+        prepared = self._prepare_candidate("candidate", task_seq, decoder=decoder, base_wolf=base_wolf)
+        if prepared is None:
+            return None
+        _, decoded_agvs, _ = prepared
+        return self._strict_candidate_from_agvs(base_wolf, "candidate", decoded_agvs)
 
     def _neighbor_by_operator(self, task_seq, operator_name):
         """Generate one neighbor sequence with a simple discrete move."""
@@ -476,15 +592,18 @@ class WPAOperators:
         if reverse_seq is not None:
             candidates.append(("reverse", reverse_seq))
 
-        candidate_best = None
-        candidate_name = None
+        prepared_candidates = []
         for name, candidate_seq in candidates:
-            candidate_wolf = self._rebuild_from_task_sequence(wolf, candidate_seq, decoder="cost_based")
-            if candidate_wolf is None:
-                continue
-            if (candidate_best is None) or (candidate_wolf.fitness < candidate_best.fitness):
-                candidate_best = candidate_wolf
-                candidate_name = name
+            prepared = self._prepare_candidate(name, candidate_seq, decoder="stable", base_wolf=wolf)
+            if prepared is not None:
+                prepared_candidates.append(prepared)
+
+        candidate_best = self._evaluate_prepared_candidates(
+            prepared_candidates=prepared_candidates,
+            strict_eval=lambda name, decoded_agvs: self._strict_candidate_from_agvs(wolf, name, decoded_agvs),
+            top_k=None,
+        )
+        candidate_name = getattr(candidate_best, "_candidate_name", None) if candidate_best is not None else None
 
         if candidate_best is not None and candidate_best.fitness < wolf.fitness:
             print(
@@ -541,15 +660,18 @@ class WPAOperators:
             if ox_align_seq is not None:
                 candidates.append(("ox+align", ox_align_seq))
 
-        candidate_best = None
-        candidate_name = None
+        prepared_candidates = []
         for name, candidate_seq in candidates:
-            candidate_wolf = self._rebuild_from_task_sequence(wolf, candidate_seq, decoder="cost_based")
-            if candidate_wolf is None:
-                continue
-            if (candidate_best is None) or (candidate_wolf.fitness < candidate_best.fitness):
-                candidate_best = candidate_wolf
-                candidate_name = name
+            prepared = self._prepare_candidate(name, candidate_seq, decoder="stable", base_wolf=wolf)
+            if prepared is not None:
+                prepared_candidates.append(prepared)
+
+        candidate_best = self._evaluate_prepared_candidates(
+            prepared_candidates=prepared_candidates,
+            strict_eval=lambda name, decoded_agvs: self._strict_candidate_from_agvs(wolf, name, decoded_agvs),
+            top_k=None,
+        )
+        candidate_name = getattr(candidate_best, "_candidate_name", None) if candidate_best is not None else None
 
         if candidate_best is not None and candidate_best.fitness < wolf.fitness:
             print(f"  [summon improved] F {wolf.fitness:.1f} -> {candidate_best.fitness:.1f} ({candidate_name})")
@@ -622,15 +744,18 @@ class WPAOperators:
             if reverse_seq is not None:
                 candidates.append(("bounded-reverse", reverse_seq))
 
-        candidate_best = None
-        candidate_name = None
+        prepared_candidates = []
         for name, candidate_seq in candidates:
-            candidate_wolf = self._rebuild_from_task_sequence(wolf, candidate_seq, decoder="cost_based")
-            if candidate_wolf is None:
-                continue
-            if (candidate_best is None) or (candidate_wolf.fitness < candidate_best.fitness):
-                candidate_best = candidate_wolf
-                candidate_name = name
+            prepared = self._prepare_candidate(name, candidate_seq, decoder="stable", base_wolf=wolf)
+            if prepared is not None:
+                prepared_candidates.append(prepared)
+
+        candidate_best = self._evaluate_prepared_candidates(
+            prepared_candidates=prepared_candidates,
+            strict_eval=lambda name, decoded_agvs: self._strict_candidate_from_agvs(wolf, name, decoded_agvs),
+            top_k=None,
+        )
+        candidate_name = getattr(candidate_best, "_candidate_name", None) if candidate_best is not None else None
 
         if candidate_best is not None and candidate_best.fitness < wolf.fitness:
             print(

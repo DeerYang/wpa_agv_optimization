@@ -1,0 +1,170 @@
+"""Regression tests for incremental evaluator and candidate prefiltering."""
+
+from __future__ import annotations
+
+import copy
+import unittest
+from unittest import mock
+
+import numpy as np
+
+from src.wpa_agv_optimization import evaluator as evaluator_module
+from src.wpa_agv_optimization.evaluator import WolfEvaluator
+from src.wpa_agv_optimization.models import AGV, Task, Wolf
+from src.wpa_agv_optimization.wpa_ops import WPAOperators
+
+
+def _build_wolf(task_groups: list[list[Task]]) -> Wolf:
+    wolf = Wolf()
+    agvs = []
+    for agv_id, tasks in enumerate(task_groups):
+        agv = AGV(agv_id=agv_id, start_pos=(0, agv_id))
+        agv.tasks = list(tasks)
+        agv.load = sum(task.weight for task in tasks)
+        agvs.append(agv)
+    wolf.agv_list = agvs
+    return wolf
+
+
+def _fixed_tent_iter(x0=0.4):
+    while True:
+        yield 0.0
+
+
+class IncrementalEvaluatorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.grid_map = np.zeros((20, 20), dtype=int)
+        self.tasks = [
+            Task(1, 2, 2, 10, 20),
+            Task(2, 6, 4, 10, 35),
+            Task(3, 7, 6, 10, 45),
+        ]
+
+    def test_incremental_rebuild_reuses_unchanged_prefix(self) -> None:
+        with mock.patch.object(evaluator_module, "tent_map_iter", side_effect=_fixed_tent_iter):
+            base_wolf = _build_wolf([[self.tasks[0]], [self.tasks[1], self.tasks[2]]])
+            base_evaluator = WolfEvaluator(self.grid_map)
+            base_result = base_evaluator.rebuild_wolf(base_wolf)
+
+            full_candidate = _build_wolf([[self.tasks[0]], [self.tasks[2], self.tasks[1]]])
+            full_evaluator = WolfEvaluator(self.grid_map)
+            full_plan_calls = 0
+            full_plan = full_evaluator.planner.plan
+
+            def full_plan_wrap(*args, **kwargs):
+                nonlocal full_plan_calls
+                full_plan_calls += 1
+                return full_plan(*args, **kwargs)
+
+            full_evaluator.planner.plan = full_plan_wrap
+            full_result = full_evaluator.rebuild_wolf(full_candidate)
+
+            incremental_candidate = _build_wolf([[self.tasks[0]], [self.tasks[2], self.tasks[1]]])
+            incremental_evaluator = WolfEvaluator(self.grid_map)
+            incremental_plan_calls = 0
+            incremental_plan = incremental_evaluator.planner.plan
+
+            def incremental_plan_wrap(*args, **kwargs):
+                nonlocal incremental_plan_calls
+                incremental_plan_calls += 1
+                return incremental_plan(*args, **kwargs)
+
+            incremental_evaluator.planner.plan = incremental_plan_wrap
+            incremental_result = incremental_evaluator.rebuild_wolf(
+                incremental_candidate,
+                base_wolf=copy.deepcopy(base_result),
+            )
+
+        self.assertEqual(incremental_result.fitness, full_result.fitness)
+        self.assertEqual(incremental_result.total_dist, full_result.total_dist)
+        self.assertEqual(incremental_result.time_penalty, full_result.time_penalty)
+        self.assertEqual(incremental_result.conflict_count, full_result.conflict_count)
+        self.assertEqual(
+            incremental_result.agv_list[0].path,
+            base_result.agv_list[0].path,
+        )
+        self.assertLess(incremental_plan_calls, full_plan_calls)
+
+    def test_prefilter_only_strictly_evaluates_top_candidates(self) -> None:
+        operators = WPAOperators(evaluator=None)
+        strict_calls: list[str] = []
+
+        prepared_candidates = [
+            ("slow", object(), 30.0),
+            ("best", object(), 10.0),
+            ("mid", object(), 20.0),
+        ]
+
+        def strict_eval(name, candidate_payload):
+            strict_calls.append(name)
+            return {"name": name, "fitness": {"slow": 300.0, "best": 100.0, "mid": 200.0}[name]}
+
+        best = operators._evaluate_prepared_candidates(
+            prepared_candidates=prepared_candidates,
+            strict_eval=strict_eval,
+            top_k=2,
+        )
+
+        self.assertEqual(strict_calls, ["best", "mid"])
+        self.assertEqual(best["name"], "best")
+
+    def test_adaptive_budget_evaluates_single_clear_winner(self) -> None:
+        operators = WPAOperators(evaluator=None)
+        strict_calls: list[str] = []
+        prepared_candidates = [
+            ("best", object(), 10.0),
+            ("mid", object(), 30.0),
+            ("slow", object(), 60.0),
+        ]
+
+        def strict_eval(name, candidate_payload):
+            strict_calls.append(name)
+            return {"name": name, "fitness": {"best": 100.0, "mid": 200.0, "slow": 300.0}[name]}
+
+        best = operators._evaluate_prepared_candidates(
+            prepared_candidates=prepared_candidates,
+            strict_eval=strict_eval,
+            top_k=None,
+        )
+
+        self.assertEqual(strict_calls, ["best"])
+        self.assertEqual(best["name"], "best")
+
+    def test_stable_decoder_preserves_unchanged_prefix_segment(self) -> None:
+        operators = WPAOperators(evaluator=None)
+        base_wolf = _build_wolf([[self.tasks[0]], [self.tasks[1], self.tasks[2]]])
+
+        decoded = operators._decode_sequence_to_agvs_stable(
+            [self.tasks[0], self.tasks[2], self.tasks[1]],
+            base_wolf=base_wolf,
+        )
+
+        self.assertEqual(
+            [[task.id for task in agv.tasks] for agv in decoded],
+            [[1], [3, 2]],
+        )
+
+    def test_stable_prepare_candidate_pushes_first_changed_index_back(self) -> None:
+        operators = WPAOperators(evaluator=None)
+        base_wolf = _build_wolf([[self.tasks[0]], [self.tasks[1], self.tasks[2]]])
+        evaluator = WolfEvaluator(self.grid_map)
+        base_result = evaluator.rebuild_wolf(copy.deepcopy(base_wolf))
+
+        prepared = operators._prepare_candidate(
+            "stable",
+            [self.tasks[0], self.tasks[2], self.tasks[1]],
+            decoder="stable",
+            base_wolf=base_result,
+        )
+
+        self.assertIsNotNone(prepared)
+        _, decoded_agvs, _ = prepared
+        candidate = Wolf()
+        candidate.agv_list = decoded_agvs
+
+        state = evaluator._build_initial_state(candidate, base_wolf=base_result)
+        self.assertEqual(state["start_idx"], 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

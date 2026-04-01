@@ -18,6 +18,7 @@ from .utils import manhattan_dist, tent_map_iter
 
 Node = Tuple[int, int]
 TimedNode = Tuple[int, int, int]
+TimedEdge = Tuple[Node, Node, int]
 
 
 class WolfEvaluator:
@@ -42,6 +43,11 @@ class WolfEvaluator:
         if conflict["kind"] == "edge":
             return f"edge:{conflict['edge']}@{conflict['time']}"
         return f"node:{conflict['node']}@{conflict['time']}"
+
+    @staticmethod
+    def _task_signature(agv) -> Tuple[int, ...]:
+        """Build a stable signature for one AGV task sequence."""
+        return tuple(task.id for task in agv.tasks)
 
     @staticmethod
     def _temporary_blocks_for_conflict(conflict: Dict[str, object]) -> Set[TimedNode]:
@@ -72,6 +78,7 @@ class WolfEvaluator:
         end_time: int,
         reservation_table: Set[TimedNode],
         reservation_owner: Dict[TimedNode, int],
+        agv_reserved_nodes: Optional[Set[TimedNode]] = None,
     ) -> None:
         """
         把冲突重试阶段产生的原地等待写入时空占用表。
@@ -87,6 +94,86 @@ class WolfEvaluator:
             wait_node = (x, y, wait_time)
             reservation_table.add(wait_node)
             reservation_owner[wait_node] = agv_id
+            if agv_reserved_nodes is not None:
+                agv_reserved_nodes.add(wait_node)
+
+    @staticmethod
+    def _copy_cached_agv_state(target_agv, base_agv) -> None:
+        """Copy reusable cached planner state from one AGV to another."""
+        target_agv.load = base_agv.load
+        target_agv.path = list(base_agv.path)
+        target_agv.finish_time = base_agv.finish_time
+        target_agv._task_signature = tuple(getattr(base_agv, "_task_signature", ()))
+        target_agv._reserved_nodes = set(getattr(base_agv, "_reserved_nodes", set()))
+        target_agv._reserved_edges = set(getattr(base_agv, "_reserved_edges", set()))
+        target_agv._cached_metrics = dict(getattr(base_agv, "_cached_metrics", {}))
+
+    def _first_changed_agv_index(self, base_wolf, candidate_agvs) -> int:
+        """Find the first AGV index whose task signature differs from the base wolf."""
+        if base_wolf is None or not getattr(base_wolf, "_cache_ready", False):
+            return 0
+
+        shared = min(len(base_wolf.agv_list), len(candidate_agvs))
+        for idx in range(shared):
+            base_agv = base_wolf.agv_list[idx]
+            candidate_agv = candidate_agvs[idx]
+            if base_agv.start_pos != candidate_agv.start_pos:
+                return idx
+            if getattr(base_agv, "_task_signature", None) != self._task_signature(candidate_agv):
+                return idx
+
+        return shared if len(base_wolf.agv_list) == len(candidate_agvs) else shared
+
+    def _build_initial_state(self, wolf, base_wolf=None):
+        """Seed one rebuild state, optionally reusing an unchanged AGV prefix."""
+        state = {
+            "reservation_table": set(),
+            "reservation_owner": {},
+            "occupied_edges": set(),
+            "edge_owner": {},
+            "wait_counts": {},
+            "agv_map": {agv.id: agv for agv in wolf.agv_list},
+            "total_dist": 0,
+            "total_time_penalty": 0,
+            "conflict_count": 0,
+            "deadlock_count": 0,
+            "deadlock_risk_count": 0,
+            "replan_count": 0,
+            "reroute_count": 0,
+            "pair_repeat_counts": {},
+            "resource_repeat_counts": {},
+            "start_idx": 0,
+        }
+
+        if base_wolf is None or not getattr(base_wolf, "_cache_ready", False):
+            return state
+
+        start_idx = self._first_changed_agv_index(base_wolf, wolf.agv_list)
+        state["start_idx"] = start_idx
+
+        for idx in range(start_idx):
+            target_agv = wolf.agv_list[idx]
+            base_agv = base_wolf.agv_list[idx]
+            self._copy_cached_agv_state(target_agv, base_agv)
+
+            for node in target_agv._reserved_nodes:
+                state["reservation_table"].add(node)
+                state["reservation_owner"][node] = target_agv.id
+
+            for edge in target_agv._reserved_edges:
+                state["occupied_edges"].add(edge)
+                state["edge_owner"][edge] = target_agv.id
+
+            cached_metrics = target_agv._cached_metrics
+            state["total_dist"] += int(cached_metrics.get("dist", 0))
+            state["total_time_penalty"] += float(cached_metrics.get("time_penalty", 0))
+            state["conflict_count"] += int(cached_metrics.get("conflict_count", 0))
+            state["deadlock_count"] += int(cached_metrics.get("deadlock_count", 0))
+            state["deadlock_risk_count"] += int(cached_metrics.get("deadlock_risk_count", 0))
+            state["replan_count"] += int(cached_metrics.get("replan_count", 0))
+            state["reroute_count"] += int(cached_metrics.get("reroute_count", 0))
+
+        return state
 
     def _detect_conflict_event(
         self,
@@ -94,8 +181,8 @@ class WolfEvaluator:
         segment_path: List[TimedNode],
         reservation_table: Set[TimedNode],
         reservation_owner: Dict[TimedNode, int],
-        occupied_edges: Set[Tuple[Node, Node, int]],
-        edge_owner: Dict[Tuple[Node, Node, int], int],
+        occupied_edges: Set[TimedEdge],
+        edge_owner: Dict[TimedEdge, int],
         agv_map: Dict[int, object],
     ) -> Optional[Dict[str, object]]:
         """对候选段路径做冲突检测，并返回冲突详情。"""
@@ -170,35 +257,43 @@ class WolfEvaluator:
                     }
         return None
 
-    def rebuild_wolf(self, wolf):
+    def rebuild_wolf(self, wolf, base_wolf=None):
         """重建并评估狼个体。"""
-        reservation_table: Set[TimedNode] = set()
-        reservation_owner: Dict[TimedNode, int] = {}
-        occupied_edges: Set[Tuple[Node, Node, int]] = set()
-        edge_owner: Dict[Tuple[Node, Node, int], int] = {}
-        wait_counts: Dict[int, int] = {}
-        agv_map: Dict[int, object] = {agv.id: agv for agv in wolf.agv_list}
-
-        total_dist = 0
-        total_time_penalty = 0
-
-        conflict_count = 0
-        deadlock_count = 0
-        deadlock_risk_count = 0
-        replan_count = 0
-        reroute_count = 0
-
-        pair_repeat_counts: Dict[Tuple[int, int, str], int] = {}
-        resource_repeat_counts: Dict[str, int] = {}
+        state = self._build_initial_state(wolf, base_wolf=base_wolf)
+        reservation_table: Set[TimedNode] = state["reservation_table"]
+        reservation_owner: Dict[TimedNode, int] = state["reservation_owner"]
+        occupied_edges: Set[TimedEdge] = state["occupied_edges"]
+        edge_owner: Dict[TimedEdge, int] = state["edge_owner"]
+        wait_counts: Dict[int, int] = state["wait_counts"]
+        agv_map: Dict[int, object] = state["agv_map"]
+        total_dist = state["total_dist"]
+        total_time_penalty = state["total_time_penalty"]
+        conflict_count = state["conflict_count"]
+        deadlock_count = state["deadlock_count"]
+        deadlock_risk_count = state["deadlock_risk_count"]
+        replan_count = state["replan_count"]
+        reroute_count = state["reroute_count"]
+        pair_repeat_counts = state["pair_repeat_counts"]
+        resource_repeat_counts = state["resource_repeat_counts"]
+        start_idx = state["start_idx"]
 
         x0 = random.random()
         chaos_iter = tent_map_iter(x0=x0)
 
-        for agv in wolf.agv_list:
+        for agv in wolf.agv_list[start_idx:]:
             wait_counts.setdefault(agv.id, 0)
             curr_pos = agv.start_pos
             curr_time = 0
             full_path: List[TimedNode] = []
+            agv_reserved_nodes: Set[TimedNode] = set()
+            agv_reserved_edges: Set[TimedEdge] = set()
+
+            agv_conflict_count = 0
+            agv_deadlock_count = 0
+            agv_deadlock_risk_count = 0
+            agv_replan_count = 0
+            agv_reroute_count = 0
+            agv_time_penalty = 0
 
             targets = list(agv.tasks)
             if agv.tasks:
@@ -223,7 +318,7 @@ class WolfEvaluator:
                     )
 
                     if segment_path is None:
-                        replan_count += 1
+                        agv_replan_count += 1
                         wait_counts[agv.id] += 1
                         curr_time += 1
                         self._reserve_wait_window(
@@ -233,6 +328,7 @@ class WolfEvaluator:
                             end_time=curr_time,
                             reservation_table=reservation_table,
                             reservation_owner=reservation_owner,
+                            agv_reserved_nodes=agv_reserved_nodes,
                         )
                         retries += 1
                         continue
@@ -260,7 +356,7 @@ class WolfEvaluator:
 
                     holder_id = int(conflict["holder_id"])
                     holder_agv = agv_map[holder_id]
-                    conflict_count += 1
+                    agv_conflict_count += 1
 
                     pair_key = (agv.id, holder_id, str(conflict["kind"]))
                     pair_repeat_counts[pair_key] = pair_repeat_counts.get(pair_key, 0) + 1
@@ -299,20 +395,20 @@ class WolfEvaluator:
 
                     action = event.action
                     if cycle:
-                        deadlock_count += 1
+                        agv_deadlock_count += 1
                         victim = self.traffic_manager.pick_victim_for_deadlock(cycle, agv_map)
                         self.traffic_manager.clear_wait_dependency(victim)
                         if victim == agv.id:
                             action = "replan"
                     elif event.risk_score >= self.traffic_manager.deadlock_risk_threshold:
-                        deadlock_risk_count += 1
+                        agv_deadlock_risk_count += 1
 
                     if action == "reroute":
-                        reroute_count += 1
+                        agv_reroute_count += 1
                         temporary_blocks |= self._temporary_blocks_for_conflict(conflict)
                         curr_time += 1
                     elif action == "replan":
-                        replan_count += 1
+                        agv_replan_count += 1
                         temporary_blocks |= self._temporary_blocks_for_conflict(conflict)
                         curr_time += 2
                     else:
@@ -325,12 +421,13 @@ class WolfEvaluator:
                         end_time=curr_time,
                         reservation_table=reservation_table,
                         reservation_owner=reservation_owner,
+                        agv_reserved_nodes=agv_reserved_nodes,
                     )
 
                     retries += 1
 
                 if segment_path is None:
-                    total_time_penalty += 10000
+                    agv_time_penalty += 10000
                     segment_path = [(target_pos[0], target_pos[1], curr_time + 10)]
 
                 if full_path:
@@ -342,11 +439,12 @@ class WolfEvaluator:
                 curr_pos = (last_node[0], last_node[1])
                 curr_time = last_node[2] + Config.SERVICE_TIME
                 if target is not None:
-                    total_time_penalty += max(0, curr_time - target.deadline)
+                    agv_time_penalty += max(0, curr_time - target.deadline)
 
                 for point in segment_path:
                     reservation_table.add(point)
                     reservation_owner[point] = agv.id
+                    agv_reserved_nodes.add(point)
 
                 for idx in range(len(segment_path) - 1):
                     u = (segment_path[idx][0], segment_path[idx][1])
@@ -355,18 +453,39 @@ class WolfEvaluator:
                     edge_key = (u, v, time_step)
                     occupied_edges.add(edge_key)
                     edge_owner[edge_key] = agv.id
+                    agv_reserved_edges.add(edge_key)
 
                 for extra_wait in range(1, Config.SERVICE_TIME + 1):
                     wait_node = (last_node[0], last_node[1], last_node[2] + extra_wait)
                     reservation_table.add(wait_node)
                     reservation_owner[wait_node] = agv.id
+                    agv_reserved_nodes.add(wait_node)
 
                 self.traffic_manager.clear_wait_dependency(agv.id)
                 wait_counts[agv.id] = 0
 
             agv.path = full_path
             agv.finish_time = curr_time
+            agv._task_signature = self._task_signature(agv)
+            agv._reserved_nodes = agv_reserved_nodes
+            agv._reserved_edges = agv_reserved_edges
+            agv._cached_metrics = {
+                "dist": len(full_path),
+                "time_penalty": agv_time_penalty,
+                "conflict_count": agv_conflict_count,
+                "deadlock_count": agv_deadlock_count,
+                "deadlock_risk_count": agv_deadlock_risk_count,
+                "replan_count": agv_replan_count,
+                "reroute_count": agv_reroute_count,
+            }
+
             total_dist += len(full_path)
+            total_time_penalty += agv_time_penalty
+            conflict_count += agv_conflict_count
+            deadlock_count += agv_deadlock_count
+            deadlock_risk_count += agv_deadlock_risk_count
+            replan_count += agv_replan_count
+            reroute_count += agv_reroute_count
 
         wolf.total_dist = total_dist
         wolf.time_penalty = total_time_penalty
@@ -385,4 +504,5 @@ class WolfEvaluator:
         wolf.deadlock_risk_count = deadlock_risk_count
         wolf.replan_count = replan_count
         wolf.reroute_count = reroute_count
+        wolf._cache_ready = True
         return wolf
