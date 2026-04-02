@@ -30,3 +30,8 @@ test_result.txt
 *.docx
 *.pdf
 周汇报.md
+
+# Codex working docs
+docs/superpower/
+docs/paper-source/
+docs/private-thesis/

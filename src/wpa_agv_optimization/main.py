@@ -16,6 +16,7 @@ from .evaluator import WolfEvaluator
 from .exporter import export_result_json
 from .initializer import PopulationInitializer
 from .models import Task
+from .original_wpa import OriginalWPAConfig, OriginalWPAOptimizer
 from .scenario_inputs import SCENARIO_LIBRARY
 from .utils import generate_grid_map
 from .wpa_ops import WPAOperators
@@ -49,6 +50,7 @@ def _suppress_stdout(enabled: bool):
         return
     with open(os.devnull, "w", encoding="utf-8") as devnull, contextlib.redirect_stdout(devnull):
         yield
+
 
 
 def list_scenarios() -> None:
@@ -107,7 +109,7 @@ def parse_args() -> argparse.Namespace:
         "--algorithm",
         choices=["improved", "original"],
         default="improved",
-        help="算法版本：improved 为当前改进版，original 为原始WPA离散映射版。",
+        help="算法版本：improved 为当前改进版，original 为论文严格对应的原始WPA版。",
     )
     parser.add_argument(
         "--quiet",
@@ -174,45 +176,19 @@ def run_iteration_improved(population, operators, initializer, global_best_wolf,
 
 
 
-def run_iteration_original(population, operators, initializer, global_best_wolf, scouts_num):
-    """Run one iteration of the original WPA mapped to the discrete AGV scene."""
-    print("> 探狼执行原始游走行为...")
-    for i in range(scouts_num):
-        population[i] = operators.original_scouting(population[i], global_best_wolf)
-    population.sort(key=lambda w: w.fitness)
-    current_alpha = population[0]
-    if current_alpha.fitness < global_best_wolf.fitness:
-        global_best_wolf = current_alpha
-        print(f"> 游走后更新全局最优解，新F={global_best_wolf.fitness:.2f}")
-
-    print("> 猛狼执行原始召唤行为...")
-    for i in range(scouts_num, len(population)):
-        population[i] = operators.original_summoning(population[i], global_best_wolf)
-    population.sort(key=lambda w: w.fitness)
-    current_alpha = population[0]
-    if current_alpha.fitness < global_best_wolf.fitness:
-        global_best_wolf = current_alpha
-        print(f"> 召唤后更新全局最优解，新F={global_best_wolf.fitness:.2f}")
-
-    print("> 全种群执行原始围攻行为...")
-    for i in range(1, len(population)):
-        population[i] = operators.original_besieging(population[i], global_best_wolf)
-    population.sort(key=lambda w: w.fitness)
-    current_alpha = population[0]
-    if current_alpha.fitness < global_best_wolf.fitness:
-        global_best_wolf = current_alpha
-        print(f"> 围攻后更新全局最优解，新F={global_best_wolf.fitness:.2f}")
-
-    print("> 执行强者生存更新...")
-    population = population[:-2]
-    for _ in range(2):
-        population.append(initializer._create_one_wolf())
-
-    population.sort(key=lambda w: w.fitness)
-    current_alpha = population[0]
-    if current_alpha.fitness < global_best_wolf.fitness:
-        global_best_wolf = current_alpha
-    return population, global_best_wolf
+def _run_original_paper_algorithm(grid_map, task_list, max_iter, *, verbose: bool):
+    """Run the paper-faithful original WPA with minimal discrete decoding."""
+    evaluator = WolfEvaluator(grid_map)
+    rng = random
+    optimizer = OriginalWPAOptimizer(
+        grid_map,
+        task_list,
+        evaluator=evaluator,
+        config=OriginalWPAConfig(),
+        rng=rng,
+    )
+    result = optimizer.run(max_iter=max_iter, pop_size=Config.POP_SIZE, verbose=verbose)
+    return result.best_wolf, result.convergence
 
 
 
@@ -245,46 +221,56 @@ def _run_algorithm_impl(scenario: int | None, seed: int | None, algorithm: str, 
         scenario_name = "随机任务"
         print(f"  > 成功生成 {len(task_list)} 个随机任务")
 
-    print("\n=== 2. 狼群种群初始化 ===")
-    initializer = PopulationInitializer(grid_map, task_list)
-    population = initializer.generate_population()
-    population.sort(key=lambda w: w.fitness)
-    alpha_wolf = population[0]
-    print("  > 初始头狼生成完成")
-    print(
-        f"    适应度F={alpha_wolf.fitness:.2f} | 使用车辆数N={alpha_wolf.vehicle_num} | "
-        f"总行驶距离D={alpha_wolf.total_dist} | 时间窗惩罚T={alpha_wolf.time_penalty}"
-    )
-
     max_iter = 50
-    scouts_num = 5
-    evaluator = WolfEvaluator(grid_map)
-    operators = WPAOperators(evaluator)
-    global_best_wolf = alpha_wolf
-
     convergence = []
 
-    print(f"\n=== 3. 开始狼群算法迭代，算法版本={algorithm}，最大迭代次数={max_iter} ===")
-    for iter_idx in range(max_iter):
-        print(f"\n--- 第 {iter_idx + 1}/{max_iter} 代迭代开始 ---")
-        if algorithm == "original":
-            population, global_best_wolf = run_iteration_original(
-                population, operators, initializer, global_best_wolf, scouts_num
-            )
-        else:
-            population, global_best_wolf = run_iteration_improved(
-                population, operators, initializer, global_best_wolf, iter_idx, max_iter, scouts_num
-            )
-
-        current_alpha = population[0]
-        convergence.append({"iter": iter_idx + 1, "best_fitness": round(float(global_best_wolf.fitness), 2)})
-
-        print(f"--- 第 {iter_idx + 1}/{max_iter} 代迭代结束 ---")
-        print(f"    当前代最优F={current_alpha.fitness:.2f} | 全局最优F={global_best_wolf.fitness:.2f}")
-        print(
-            f"    全局最优指标：车辆数N={global_best_wolf.vehicle_num} | "
-            f"总距离D={global_best_wolf.total_dist} | 时间惩罚T={global_best_wolf.time_penalty}"
+    if algorithm == "original":
+        print("\n=== 2. 原始WPA连续状态初始化 ===")
+        global_best_wolf, convergence = _run_original_paper_algorithm(
+            grid_map,
+            task_list,
+            max_iter,
+            verbose=True,
         )
+    else:
+        print("\n=== 2. 狼群种群初始化 ===")
+        initializer = PopulationInitializer(grid_map, task_list)
+        population = initializer.generate_population()
+        population.sort(key=lambda w: w.fitness)
+        alpha_wolf = population[0]
+        print("  > 初始头狼生成完成")
+        print(
+            f"    适应度F={alpha_wolf.fitness:.2f} | 使用车辆数N={alpha_wolf.vehicle_num} | "
+            f"总行驶距离D={alpha_wolf.total_dist} | 时间窗惩罚T={alpha_wolf.time_penalty}"
+        )
+
+        scouts_num = 5
+        evaluator = WolfEvaluator(grid_map)
+        operators = WPAOperators(evaluator)
+        global_best_wolf = alpha_wolf
+
+        print(f"\n=== 3. 开始狼群算法迭代，算法版本={algorithm}，最大迭代次数={max_iter} ===")
+        for iter_idx in range(max_iter):
+            print(f"\n--- 第 {iter_idx + 1}/{max_iter} 代迭代开始 ---")
+            population, global_best_wolf = run_iteration_improved(
+                population,
+                operators,
+                initializer,
+                global_best_wolf,
+                iter_idx,
+                max_iter,
+                scouts_num,
+            )
+
+            current_alpha = population[0]
+            convergence.append({"iter": iter_idx + 1, "best_fitness": round(float(global_best_wolf.fitness), 2)})
+
+            print(f"--- 第 {iter_idx + 1}/{max_iter} 代迭代结束 ---")
+            print(f"    当前代最优F={current_alpha.fitness:.2f} | 全局最优F={global_best_wolf.fitness:.2f}")
+            print(
+                f"    全局最优指标：车辆数N={global_best_wolf.vehicle_num} | "
+                f"总距离D={global_best_wolf.total_dist} | 时间惩罚T={global_best_wolf.time_penalty}"
+            )
 
     print("\n=== 4. 算法迭代结束，最终优化结果 ===")
     print(f"  算法版本：{algorithm}")
