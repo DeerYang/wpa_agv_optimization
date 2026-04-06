@@ -34,6 +34,343 @@ class WPAOperators:
         return seq
 
     @staticmethod
+    def _flatten_agv_task_groups(task_groups):
+        """Flatten one list of per-AGV task groups into a single sequence."""
+        seq = []
+        for tasks in task_groups:
+            seq.extend(tasks)
+        return seq
+
+    @staticmethod
+    def _weighted_component_scores(wolf):
+        """Return the weighted objective contributions for one evaluated wolf."""
+        return {
+            "distance": Config.W1_DIST * float(getattr(wolf, "total_dist", 0)),
+            "vehicle": Config.W2_NUM * float(getattr(wolf, "vehicle_num", 0)),
+            "time": Config.W3_TIME * float(getattr(wolf, "time_penalty", 0)),
+            "conflict": Config.W4_CONFLICT * float(getattr(wolf, "conflict_count", 0)),
+            "replan": Config.W5_REPLAN * float(getattr(wolf, "replan_count", 0)),
+            "risk": Config.W6_RISK * float(getattr(wolf, "deadlock_risk_count", 0)),
+        }
+
+    def _dominant_objective_component(self, wolf):
+        """Return the dominant weighted objective component of one wolf."""
+        scores = self._weighted_component_scores(wolf)
+        return max(scores.items(), key=lambda item: (item[1], item[0]))[0]
+
+    def _estimate_task_finish_times(self, agv):
+        """Approximate task completion times for one AGV using the fast route model."""
+        curr = agv.start_pos
+        curr_time = 0
+        finish_times = {}
+
+        for task in agv.tasks:
+            step = manhattan_dist(curr, (task.x, task.y))
+            curr_time += step + Config.SERVICE_TIME
+            finish_times[task.id] = curr_time
+            curr = (task.x, task.y)
+
+        return finish_times
+
+    def _most_tardy_task_ids(self, wolf, top_k=2):
+        """Return task ids with the highest approximate deadline pressure."""
+        ranked = []
+        for agv in wolf.agv_list:
+            if not agv.tasks:
+                continue
+            finish_times = self._estimate_task_finish_times(agv)
+            for task in agv.tasks:
+                lateness = max(0, finish_times[task.id] - task.deadline)
+                urgency = max(0.0, 220.0 - float(task.deadline)) / 20.0
+                ranked.append((lateness * 6.0 + urgency, task.id))
+
+        if not ranked:
+            return []
+
+        ranked.sort(reverse=True)
+        chosen = [task_id for score, task_id in ranked[:top_k] if score > 0]
+        if chosen:
+            return chosen
+
+        fallback = sorted(
+            (task.deadline, task.id)
+            for agv in wolf.agv_list
+            for task in agv.tasks
+        )
+        return [task_id for _, task_id in fallback[:top_k]]
+
+    def _lightest_agv(self, wolf):
+        """Return the lightest active AGV, used for fleet-compression moves."""
+        active_agvs = [agv for agv in wolf.agv_list if agv.tasks]
+        if len(active_agvs) < 2:
+            return None
+        return min(
+            active_agvs,
+            key=lambda agv: (
+                len(agv.tasks),
+                agv.load,
+                self._estimate_route_cost(agv.tasks, agv.start_pos),
+            ),
+        )
+
+    def _priority_focus_ids(self, wolf, dominant, top_k=3):
+        """Pick the task ids that deserve focused operator effort."""
+        if dominant == "time":
+            return set(self._most_tardy_task_ids(wolf, top_k=top_k))
+
+        if dominant == "vehicle":
+            light_agv = self._lightest_agv(wolf)
+            if light_agv is None:
+                return set()
+            return {task.id for task in light_agv.tasks[:top_k]}
+
+        focus_ids = self._bottleneck_task_ids(wolf)
+        if not focus_ids:
+            return set()
+        current_seq = self._flatten_tasks(wolf)
+        ranked = sorted(
+            (
+                (self._task_risk_score(current_seq, idx, focus_ids), task.id)
+                for idx, task in enumerate(current_seq)
+                if task.id in focus_ids
+            ),
+            reverse=True,
+        )
+        return {task_id for _, task_id in ranked[:top_k]}
+
+    def _move_task_ids_earlier(self, task_seq, task_ids, step_cap=3):
+        """Move a few target tasks earlier in the global order."""
+        if len(task_seq) < 2:
+            return None
+
+        new_seq = self._copy_wolf_tasks(task_seq)
+        original_ids = [task.id for task in task_seq]
+        moved = False
+
+        for task_id in task_ids:
+            current_idx = next((idx for idx, task in enumerate(new_seq) if task.id == task_id), None)
+            if current_idx is None or current_idx == 0:
+                continue
+            item = new_seq.pop(current_idx)
+            new_idx = max(0, current_idx - step_cap)
+            new_seq.insert(new_idx, item)
+            moved = moved or (new_idx != current_idx)
+
+        if not moved or [task.id for task in new_seq] == original_ids:
+            return None
+        return new_seq
+
+    def _merge_lightest_agv_sequence(self, wolf):
+        """Try to absorb the lightest AGV into the remaining fleet."""
+        active_agvs = [agv for agv in wolf.agv_list if agv.tasks]
+        if len(active_agvs) < 2:
+            return None
+
+        donor = self._lightest_agv(wolf)
+        if donor is None:
+            return None
+
+        recipient_agvs = [agv for agv in active_agvs if agv.id != donor.id]
+        route_map = {agv.id: list(agv.tasks) for agv in recipient_agvs}
+        load_map = {agv.id: sum(task.weight for task in agv.tasks) for agv in recipient_agvs}
+
+        for task in donor.tasks:
+            best_plan = None
+            for agv in recipient_agvs:
+                if load_map[agv.id] + task.weight > Config.AGV_CAPACITY:
+                    continue
+
+                base_tasks = route_map[agv.id]
+                base_cost = self._estimate_route_cost(base_tasks, agv.start_pos)
+                for pos in range(len(base_tasks) + 1):
+                    candidate_tasks = base_tasks[:pos] + [task] + base_tasks[pos:]
+                    delta = self._estimate_route_cost(candidate_tasks, agv.start_pos) - base_cost
+                    if (best_plan is None) or (delta < best_plan[0]):
+                        best_plan = (delta, agv.id, pos)
+
+            if best_plan is None:
+                return None
+
+            _, agv_id, pos = best_plan
+            route_map[agv_id].insert(pos, task)
+            load_map[agv_id] += task.weight
+
+        merged_seq = self._flatten_agv_task_groups([route_map[agv.id] for agv in recipient_agvs])
+        if [task.id for task in merged_seq] == [task.id for task in self._flatten_tasks(wolf)]:
+            return None
+        return merged_seq
+
+    def _spread_focus_tasks(self, task_seq, focus_ids):
+        """Spread bottleneck tasks apart to reduce localized congestion pressure."""
+        focus_tasks = [task for task in task_seq if task.id in focus_ids]
+        other_tasks = [task for task in task_seq if task.id not in focus_ids]
+        if len(focus_tasks) < 2 or not other_tasks:
+            return None
+
+        result = [focus_tasks[0]]
+        remaining_focus = focus_tasks[1:]
+        chunk_size = max(1, len(other_tasks) // max(1, len(remaining_focus)))
+        chunk_fill = 0
+
+        for task in other_tasks:
+            result.append(task)
+            chunk_fill += 1
+            if remaining_focus and chunk_fill >= chunk_size:
+                result.append(remaining_focus.pop(0))
+                chunk_fill = 0
+
+        result.extend(remaining_focus)
+        if [task.id for task in result] == [task.id for task in task_seq]:
+            return None
+        return result
+
+    def _replace_agv_tasks(self, wolf, target_agv_id, replacement_tasks):
+        """Return one flattened sequence with a single AGV subsequence replaced."""
+        task_groups = []
+        for agv in wolf.agv_list:
+            if agv.id == target_agv_id:
+                task_groups.append(list(replacement_tasks))
+            else:
+                task_groups.append(list(agv.tasks))
+        return self._flatten_agv_task_groups(task_groups)
+
+    def _route_detour_score(self, tasks, idx, start_pos):
+        """Approximate how much one task hurts local route compactness."""
+        prev_pos = start_pos if idx == 0 else self._task_pos(tasks[idx - 1])
+        curr_pos = self._task_pos(tasks[idx])
+        next_pos = Config.DEPOT_NODE if idx == len(tasks) - 1 else self._task_pos(tasks[idx + 1])
+        return (
+            manhattan_dist(prev_pos, curr_pos)
+            + manhattan_dist(curr_pos, next_pos)
+            - manhattan_dist(prev_pos, next_pos)
+        )
+
+    def _shorten_bottleneck_route_sequence(self, wolf, top_k=4):
+        """Locally reorder the bottleneck AGV route to reduce fast route cost."""
+        active_agvs = [agv for agv in wolf.agv_list if agv.tasks]
+        if not active_agvs:
+            return None
+
+        bottleneck_agv = max(active_agvs, key=self._agv_route_cost)
+        base_tasks = list(bottleneck_agv.tasks)
+        if len(base_tasks) < 3:
+            return None
+
+        start_pos = bottleneck_agv.start_pos
+        base_cost = self._estimate_route_cost(base_tasks, start_pos)
+        ranked_indices = sorted(
+            range(len(base_tasks)),
+            key=lambda idx: (
+                self._route_detour_score(base_tasks, idx, start_pos),
+                -base_tasks[idx].deadline,
+            ),
+            reverse=True,
+        )
+        focus_indices = ranked_indices[: min(top_k, len(base_tasks))]
+        best_tasks = None
+        best_cost = base_cost
+
+        for idx in focus_indices:
+            remainder = list(base_tasks)
+            task = remainder.pop(idx)
+            for insert_idx in range(len(remainder) + 1):
+                if insert_idx == idx:
+                    continue
+                candidate = remainder[:insert_idx] + [task] + remainder[insert_idx:]
+                cost = self._estimate_route_cost(candidate, start_pos)
+                if cost < best_cost:
+                    best_cost = cost
+                    best_tasks = candidate
+
+        for focus_i, i in enumerate(focus_indices):
+            for j in focus_indices[focus_i + 1 :]:
+                candidate = list(base_tasks)
+                candidate[i], candidate[j] = candidate[j], candidate[i]
+                cost = self._estimate_route_cost(candidate, start_pos)
+                if cost < best_cost:
+                    best_cost = cost
+                    best_tasks = candidate
+
+        for idx in focus_indices:
+            for seg_len in range(2, min(4, len(base_tasks)) + 1):
+                start = max(0, min(idx, len(base_tasks) - seg_len))
+                candidate = list(base_tasks)
+                candidate[start : start + seg_len] = reversed(candidate[start : start + seg_len])
+                cost = self._estimate_route_cost(candidate, start_pos)
+                if cost < best_cost:
+                    best_cost = cost
+                    best_tasks = candidate
+
+        if best_tasks is None:
+            return None
+
+        candidate_seq = self._replace_agv_tasks(wolf, bottleneck_agv.id, best_tasks)
+        if [task.id for task in candidate_seq] == [task.id for task in self._flatten_tasks(wolf)]:
+            return None
+        return candidate_seq
+
+    def _alpha_priority_task_ids(self, alpha_wolf, dominant, max_tasks=4):
+        """Select the alpha tasks that are most worth inheriting."""
+        alpha_tasks = self._flatten_tasks(alpha_wolf)
+        if not alpha_tasks:
+            return []
+
+        if dominant == "time":
+            urgent_ids = {
+                task.id for task in sorted(alpha_tasks, key=lambda task: task.deadline)[:max_tasks]
+            }
+            return [task.id for task in alpha_tasks if task.id in urgent_ids]
+
+        if dominant == "vehicle":
+            active_agvs = [agv for agv in alpha_wolf.agv_list if agv.tasks]
+            if not active_agvs:
+                return []
+            anchor_agv = max(
+                active_agvs,
+                key=lambda agv: (len(agv.tasks), -self._estimate_route_cost(agv.tasks, agv.start_pos)),
+            )
+            return [task.id for task in anchor_agv.tasks[:max_tasks]]
+
+        focus_ids = self._bottleneck_task_ids(alpha_wolf)
+        selected = [task.id for task in alpha_tasks if task.id in focus_ids][:max_tasks]
+        if selected:
+            return selected
+        return [task.id for task in alpha_tasks[:max_tasks]]
+
+    def _inherit_priority_tasks(self, wolf_tasks, alpha_tasks, priority_ids, front_bias=False):
+        """Keep a selected alpha task subset contiguous in the follower sequence."""
+        if not priority_ids:
+            return None
+
+        wolf_task_map = {task.id: task for task in wolf_tasks}
+        chosen_ids = [task_id for task_id in priority_ids if task_id in wolf_task_map]
+        if not chosen_ids:
+            return None
+
+        base_ids = [task.id for task in wolf_tasks if task.id not in chosen_ids]
+        if front_bias:
+            child_ids = chosen_ids + base_ids
+        else:
+            alpha_pos = self._index_map(alpha_tasks)
+            target_center = sum(alpha_pos[task_id] for task_id in chosen_ids if task_id in alpha_pos) / len(chosen_ids)
+            insert_idx = max(0, min(len(base_ids), round(target_center) - (len(chosen_ids) // 2)))
+            child_ids = base_ids[:insert_idx] + chosen_ids + base_ids[insert_idx:]
+
+        if child_ids == [task.id for task in wolf_tasks]:
+            return None
+        return [wolf_task_map[task_id] for task_id in child_ids]
+
+
+    @staticmethod
+    def _follow_shape_base(wolf, alpha_wolf):
+        """Prefer the lower-vehicle layout when borrowing route boundaries."""
+        if alpha_wolf is None:
+            return wolf
+        if getattr(alpha_wolf, "vehicle_num", 0) <= getattr(wolf, "vehicle_num", 0):
+            return alpha_wolf
+        return wolf
+
+    @staticmethod
     def _copy_wolf_tasks(task_seq):
         """Return a safe shallow copy for sequence reordering."""
         return list(task_seq)
@@ -399,6 +736,59 @@ class WPAOperators:
             return None
         return (name, decoded_agvs, self._approximate_candidate_score(decoded_agvs))
 
+    def _prepare_strategy_candidate(
+        self,
+        name,
+        task_seq,
+        *,
+        decoder="cost_based",
+        decode_base_wolf=None,
+        eval_base_wolf=None,
+    ):
+        """Prepare one candidate with separated decode and evaluation bases."""
+        prepared = self._prepare_candidate(
+            name,
+            task_seq,
+            decoder=decoder,
+            base_wolf=decode_base_wolf,
+        )
+        if prepared is None:
+            return None
+        _, decoded_agvs, approx_score = prepared
+        return {
+            "name": name,
+            "decoded_agvs": decoded_agvs,
+            "approx_score": approx_score,
+            "eval_base_wolf": eval_base_wolf,
+        }
+
+    def _evaluate_strategy_candidates(self, prepared_candidates, *, top_k=None):
+        """Strictly evaluate prepared candidates with per-candidate evaluation bases."""
+        if not prepared_candidates:
+            return None
+
+        normalized = [
+            (item["name"], item["decoded_agvs"], item["approx_score"], item.get("eval_base_wolf"))
+            for item in prepared_candidates
+        ]
+        if top_k is None:
+            limit = self._adaptive_strict_budget([(name, decoded_agvs, approx) for name, decoded_agvs, approx, _ in normalized])
+        else:
+            limit = max(1, min(top_k, len(normalized)))
+
+        candidate_best = None
+        candidate_best_fitness = None
+        for name, decoded_agvs, _, eval_base_wolf in sorted(normalized, key=lambda item: item[2])[:limit]:
+            result = self._strict_candidate_from_agvs(eval_base_wolf, name, decoded_agvs)
+            fitness = self._result_fitness(result)
+            if fitness is None:
+                continue
+            if candidate_best is None or fitness < candidate_best_fitness:
+                candidate_best = result
+                candidate_best_fitness = fitness
+
+        return candidate_best
+
     @staticmethod
     def _result_fitness(result):
         """Read one strict evaluation result's numeric fitness."""
@@ -573,68 +963,138 @@ class WPAOperators:
         new_seq[start:end] = list(reversed(new_seq[start:end]))
         return new_seq
 
+    def _append_sampled_neighbors(
+        self,
+        candidates,
+        task_seq,
+        *,
+        operator_name,
+        count,
+        label,
+        decoder,
+        decode_base_wolf,
+        eval_base_wolf,
+    ):
+        """Append several sampled neighbors, deduplicated by task id order."""
+        seen = set()
+        for sample_idx in range(count):
+            candidate_seq = self._neighbor_by_operator(task_seq, operator_name)
+            if candidate_seq is None:
+                continue
+            key = tuple(task.id for task in candidate_seq)
+            if key in seen:
+                continue
+            seen.add(key)
+            name = label if sample_idx == 0 else f"{label}-{sample_idx + 1}"
+            candidates.append((name, candidate_seq, decoder, decode_base_wolf, eval_base_wolf))
+
     def scouting(self, wolf):
-        """Improved scouting: bottleneck-guided multi-direction discrete probing."""
+        """Improved scouting: pressure-aware candidate generation focused on F reduction."""
         current_seq = self._flatten_tasks(wolf)
         if len(current_seq) < 2:
             return wolf
 
-        focus_ids = self._bottleneck_task_ids(wolf)
-        use_heavy_structure = wolf.vehicle_num >= 5
+        dominant = self._dominant_objective_component(wolf)
+        focus_ids = self._priority_focus_ids(wolf, dominant, top_k=3)
         candidates = []
 
-        if use_heavy_structure:
-            guided_reinsert = self._guided_reinsert_by_risk(current_seq, focus_ids=focus_ids, top_k=3)
-            if guided_reinsert is not None:
-                candidates.append(("bottleneck-reinsert", guided_reinsert))
+        if dominant == "time":
+            deadline_ids = self._most_tardy_task_ids(wolf, top_k=2)
+            promoted = self._move_task_ids_earlier(current_seq, deadline_ids, step_cap=4)
+            if promoted is not None:
+                candidates.append(("deadline-promote", promoted, "stable", wolf, wolf))
 
-            pull_forward = self._pull_forward_high_risk_task(current_seq, focus_ids=focus_ids, step_cap=3)
-            if pull_forward is not None:
-                candidates.append(("deadline-pull", pull_forward))
+            repaired = self._guided_reinsert_by_risk(current_seq, focus_ids=set(deadline_ids), top_k=3)
+            if repaired is not None:
+                candidates.append(("deadline-reinsert", repaired, "stable", wolf, wolf))
+        elif dominant == "vehicle":
+            merged = self._merge_lightest_agv_sequence(wolf)
+            if merged is not None:
+                candidates.append(("fleet-merge", merged, "cost_based", None, wolf))
 
-            cross_swap = self._swap_across_regions(current_seq, focus_ids=focus_ids)
-            if cross_swap is not None:
-                candidates.append(("cross-region-swap", cross_swap))
+            repaired = self._destroy_repair_sequence(current_seq, focus_ids=focus_ids, remove_count=2)
+            if repaired is not None:
+                candidates.append(("fleet-repair", repaired, "cost_based", None, wolf))
+        else:
+            shortened = self._shorten_bottleneck_route_sequence(wolf)
+            if shortened is not None:
+                candidates.append(("bottleneck-shorten", shortened, "stable", wolf, wolf))
 
-        random_swap = self._neighbor_by_operator(current_seq, "swap")
-        if random_swap is not None:
-            candidates.append(("random-swap", random_swap))
+            spread = self._spread_focus_tasks(current_seq, focus_ids)
+            if spread is not None:
+                candidates.append(("conflict-spread", spread, "stable", wolf, wolf))
 
-        random_insert = self._neighbor_by_operator(current_seq, "insert")
-        if random_insert is not None:
-            candidates.append(("random-insert", random_insert))
+            guided = self._guided_reinsert_by_risk(current_seq, focus_ids=focus_ids, top_k=3)
+            if guided is not None:
+                candidates.append(("bottleneck-reinsert", guided, "stable", wolf, wolf))
 
-        reverse_seq = self._neighbor_by_operator(current_seq, "reverse")
-        if reverse_seq is not None:
-            candidates.append(("reverse", reverse_seq))
+            repaired = self._destroy_repair_sequence(current_seq, focus_ids=focus_ids, remove_count=2)
+            if repaired is not None:
+                candidates.append(("conflict-repair", repaired, "stable", wolf, wolf))
+
+        self._append_sampled_neighbors(
+            candidates,
+            current_seq,
+            operator_name="swap",
+            count=3,
+            label="random-swap",
+            decoder="stable",
+            decode_base_wolf=wolf,
+            eval_base_wolf=wolf,
+        )
+        self._append_sampled_neighbors(
+            candidates,
+            current_seq,
+            operator_name="insert",
+            count=2,
+            label="random-insert",
+            decoder="stable",
+            decode_base_wolf=wolf,
+            eval_base_wolf=wolf,
+        )
+        self._append_sampled_neighbors(
+            candidates,
+            current_seq,
+            operator_name="reverse",
+            count=2,
+            label="reverse",
+            decoder="stable",
+            decode_base_wolf=wolf,
+            eval_base_wolf=wolf,
+        )
 
         prepared_candidates = []
-        for name, candidate_seq in candidates:
-            prepared = self._prepare_candidate(name, candidate_seq, decoder="stable", base_wolf=wolf)
+        for name, candidate_seq, decoder, decode_base_wolf, eval_base_wolf in candidates:
+            prepared = self._prepare_strategy_candidate(
+                name,
+                candidate_seq,
+                decoder=decoder,
+                decode_base_wolf=decode_base_wolf,
+                eval_base_wolf=eval_base_wolf,
+            )
             if prepared is not None:
                 prepared_candidates.append(prepared)
 
-        candidate_best = self._evaluate_prepared_candidates(
-            prepared_candidates=prepared_candidates,
-            strict_eval=lambda name, decoded_agvs: self._strict_candidate_from_agvs(wolf, name, decoded_agvs),
-            top_k=None,
-        )
+        candidate_best = self._evaluate_strategy_candidates(prepared_candidates, top_k=None)
         candidate_name = getattr(candidate_best, "_candidate_name", None) if candidate_best is not None else None
 
         if candidate_best is not None and candidate_best.fitness < wolf.fitness:
             print(
                 f"  [scout improved] F {wolf.fitness:.1f} -> {candidate_best.fitness:.1f} "
-                f"({candidate_name})"
+                f"({dominant}, {candidate_name})"
             )
             return candidate_best
         return wolf
 
     def summoning(self, wolf, alpha_wolf):
-        """Improved summoning: cluster inheritance with cost-based structural decoding."""
+        """Improved summoning: inherit alpha structures that target the dominant F component."""
         alpha_copy = copy.deepcopy(alpha_wolf)
         if not alpha_copy.agv_list or not wolf.agv_list:
             return wolf
-        if random.random() > 0.8:
+
+        fitness_gap = max(0.0, float(wolf.fitness) - float(alpha_wolf.fitness))
+        activation_prob = 0.45 if fitness_gap < 120.0 else 0.7
+        if random.random() > activation_prob:
             return wolf
 
         alpha_tasks = self._flatten_tasks(alpha_copy)
@@ -642,55 +1102,58 @@ class WPAOperators:
         if len(alpha_tasks) < 2 or len(wolf_tasks) < 2:
             return wolf
 
-        use_heavy_structure = wolf.vehicle_num >= 4
-        alpha_cluster = self._choose_alpha_cluster(alpha_copy, seg_len_min=2, seg_len_max=4) if use_heavy_structure else None
-        focus_ids = {task.id for task in alpha_cluster} if alpha_cluster else set()
+        dominant = self._dominant_objective_component(alpha_wolf)
+        follow_base = self._follow_shape_base(wolf, alpha_wolf)
+        alpha_cluster = self._choose_alpha_cluster(alpha_copy, seg_len_min=2, seg_len_max=4)
+        alpha_priority_ids = self._alpha_priority_task_ids(alpha_wolf, dominant, max_tasks=4)
         candidates = []
 
         ox_seq = self._ox_inherit(wolf_tasks, alpha_tasks, seg_len_min=2, seg_len_max=3)
         if ox_seq is not None:
-            candidates.append(("ox", ox_seq))
+            candidates.append(("ox", ox_seq, "stable", follow_base, follow_base))
 
-        if use_heavy_structure:
-            cluster_seq = self._inherit_cluster_sequence(wolf_tasks, alpha_tasks, alpha_cluster)
-            if cluster_seq is not None:
-                candidates.append(("cluster-inherit", cluster_seq))
-        else:
-            cluster_seq = None
+        priority_seq = self._inherit_priority_tasks(
+            wolf_tasks,
+            alpha_tasks,
+            alpha_priority_ids,
+            front_bias=(dominant == "time"),
+        )
+        if priority_seq is not None:
+            candidates.append(("priority-inherit", priority_seq, "stable", follow_base, follow_base))
+
+        cluster_seq = self._inherit_cluster_sequence(wolf_tasks, alpha_tasks, alpha_cluster)
+        if cluster_seq is not None:
+            candidates.append(("cluster-inherit", cluster_seq, "stable", follow_base, follow_base))
 
         align_seq = self._soft_align_to_alpha(wolf_tasks, alpha_tasks, steps=2)
         if align_seq is not None:
-            candidates.append(("align", align_seq))
+            candidates.append(("align", align_seq, "stable", follow_base, follow_base))
 
-        if cluster_seq is not None:
-            cluster_align_seq = self._soft_align_to_alpha(cluster_seq, alpha_tasks, steps=2)
-            if cluster_align_seq is not None:
-                candidates.append(("cluster+align", cluster_align_seq))
-
-            cluster_repair_seq = self._guided_reinsert_by_risk(cluster_seq, focus_ids=focus_ids, top_k=2)
-            if cluster_repair_seq is not None:
-                candidates.append(("cluster+repair", cluster_repair_seq))
-
-        if ox_seq is not None:
-            ox_align_seq = self._soft_align_to_alpha(ox_seq, alpha_tasks, steps=1)
-            if ox_align_seq is not None:
-                candidates.append(("ox+align", ox_align_seq))
+        if wolf.vehicle_num > alpha_wolf.vehicle_num:
+            merged = self._merge_lightest_agv_sequence(wolf)
+            if merged is not None:
+                candidates.append(("alpha-fleet-merge", merged, "cost_based", None, wolf))
 
         prepared_candidates = []
-        for name, candidate_seq in candidates:
-            prepared = self._prepare_candidate(name, candidate_seq, decoder="stable", base_wolf=wolf)
+        for name, candidate_seq, decoder, decode_base_wolf, eval_base_wolf in candidates:
+            prepared = self._prepare_strategy_candidate(
+                name,
+                candidate_seq,
+                decoder=decoder,
+                decode_base_wolf=decode_base_wolf,
+                eval_base_wolf=eval_base_wolf,
+            )
             if prepared is not None:
                 prepared_candidates.append(prepared)
 
-        candidate_best = self._evaluate_prepared_candidates(
-            prepared_candidates=prepared_candidates,
-            strict_eval=lambda name, decoded_agvs: self._strict_candidate_from_agvs(wolf, name, decoded_agvs),
-            top_k=None,
-        )
+        candidate_best = self._evaluate_strategy_candidates(prepared_candidates, top_k=None)
         candidate_name = getattr(candidate_best, "_candidate_name", None) if candidate_best is not None else None
 
         if candidate_best is not None and candidate_best.fitness < wolf.fitness:
-            print(f"  [summon improved] F {wolf.fitness:.1f} -> {candidate_best.fitness:.1f} ({candidate_name})")
+            print(
+                f"  [summon improved] F {wolf.fitness:.1f} -> {candidate_best.fitness:.1f} "
+                f"({dominant}, {candidate_name})"
+            )
             return candidate_best
         return wolf
 
@@ -705,78 +1168,103 @@ class WPAOperators:
         return abs(step[0])
 
     def besieging(self, wolf, alpha_wolf, curr_iter, max_iter):
-        """Improved besieging: Levy-driven dual-mode local refinement and destroy-repair."""
+        """Improved besieging: local refinement biased toward the dominant F component."""
         current_seq = self._flatten_tasks(wolf)
         alpha_seq = self._flatten_tasks(alpha_wolf)
         if len(current_seq) < 2 or len(current_seq) != len(alpha_seq):
             return wolf
-        if random.random() > 0.85:
+
+        activation_prob = 0.35 if curr_iter < max_iter // 3 else 0.6
+        if random.random() > activation_prob:
             return wolf
 
+        dominant = self._dominant_objective_component(wolf)
+        follow_base = self._follow_shape_base(wolf, alpha_wolf)
+        focus_ids = self._priority_focus_ids(wolf, dominant, top_k=3)
         step_scale = 2.0 * (1 - curr_iter / max_iter)
         levy_step = self._levy_flight_step(step_scale=step_scale)
-        step_threshold = 1.15
-        focus_ids = self._bottleneck_task_ids(wolf)
-        use_heavy_structure = wolf.vehicle_num >= 5
-
         candidates = []
-        if levy_step < step_threshold:
+
+        if dominant == "time":
+            promoted = self._move_task_ids_earlier(current_seq, list(focus_ids), step_cap=2)
+            if promoted is not None:
+                candidates.append(("local-deadline-promote", promoted, "stable", wolf, wolf))
+
+            reinserted = self._guided_reinsert_by_risk(current_seq, focus_ids=focus_ids, top_k=2)
+            if reinserted is not None:
+                candidates.append(("local-deadline-reinsert", reinserted, "stable", wolf, wolf))
+        elif dominant == "vehicle":
+            merged = self._merge_lightest_agv_sequence(wolf)
+            if merged is not None:
+                candidates.append(("local-fleet-merge", merged, "cost_based", None, wolf))
+
             align_seq = self._soft_align_to_alpha(current_seq, alpha_seq, steps=1)
             if align_seq is not None:
-                candidates.append(("local-align", align_seq))
-
-            if use_heavy_structure:
-                local_reinsert = self._guided_reinsert_by_risk(current_seq, focus_ids=focus_ids, top_k=2)
-                if local_reinsert is not None:
-                    candidates.append(("local-reinsert", local_reinsert))
-
-                pull_forward = self._pull_forward_high_risk_task(current_seq, focus_ids=focus_ids, step_cap=2)
-                if pull_forward is not None:
-                    candidates.append(("local-pull", pull_forward))
-
-            local_neighbor = self._neighbor_by_operator(current_seq, random.choice(["swap", "insert"]))
-            if local_neighbor is not None:
-                candidates.append(("local-neighbor", local_neighbor))
+                candidates.append(("local-align", align_seq, "stable", follow_base, follow_base))
         else:
+            shortened = self._shorten_bottleneck_route_sequence(wolf)
+            if shortened is not None:
+                candidates.append(("local-bottleneck-shorten", shortened, "stable", wolf, wolf))
+
+            spread = self._spread_focus_tasks(current_seq, focus_ids)
+            if spread is not None:
+                candidates.append(("local-conflict-spread", spread, "stable", wolf, wolf))
+
+            repaired = self._destroy_repair_sequence(current_seq, focus_ids=focus_ids, remove_count=2)
+            if repaired is not None:
+                candidates.append(("local-conflict-repair", repaired, "stable", wolf, wolf))
+
+        if levy_step >= 1.0:
             align_seq = self._soft_align_to_alpha(current_seq, alpha_seq, steps=2)
             if align_seq is not None:
-                candidates.append(("global-align", align_seq))
+                candidates.append(("global-align", align_seq, "stable", follow_base, follow_base))
+        else:
+            self._append_sampled_neighbors(
+                candidates,
+                current_seq,
+                operator_name="swap",
+                count=2,
+                label="local-neighbor-swap",
+                decoder="stable",
+                decode_base_wolf=wolf,
+                eval_base_wolf=wolf,
+            )
+            self._append_sampled_neighbors(
+                candidates,
+                current_seq,
+                operator_name="insert",
+                count=2,
+                label="local-neighbor-insert",
+                decoder="stable",
+                decode_base_wolf=wolf,
+                eval_base_wolf=wolf,
+            )
 
-            if use_heavy_structure:
-                repair_seq = self._destroy_repair_sequence(current_seq, focus_ids=focus_ids, remove_count=2)
-                if repair_seq is not None:
-                    candidates.append(("destroy-repair-2", repair_seq))
-
-                if curr_iter >= max_iter // 3:
-                    repair_heavy_seq = self._destroy_repair_sequence(
-                        current_seq,
-                        focus_ids=focus_ids,
-                        remove_count=3,
-                    )
-                    if repair_heavy_seq is not None:
-                        candidates.append(("destroy-repair-3", repair_heavy_seq))
-
+        for reverse_idx in range(2):
             reverse_seq = self._short_reverse(current_seq, seg_len_max=4)
             if reverse_seq is not None:
-                candidates.append(("bounded-reverse", reverse_seq))
+                name = "bounded-reverse" if reverse_idx == 0 else f"bounded-reverse-{reverse_idx + 1}"
+                candidates.append((name, reverse_seq, "stable", wolf, wolf))
 
         prepared_candidates = []
-        for name, candidate_seq in candidates:
-            prepared = self._prepare_candidate(name, candidate_seq, decoder="stable", base_wolf=wolf)
+        for name, candidate_seq, decoder, decode_base_wolf, eval_base_wolf in candidates:
+            prepared = self._prepare_strategy_candidate(
+                name,
+                candidate_seq,
+                decoder=decoder,
+                decode_base_wolf=decode_base_wolf,
+                eval_base_wolf=eval_base_wolf,
+            )
             if prepared is not None:
                 prepared_candidates.append(prepared)
 
-        candidate_best = self._evaluate_prepared_candidates(
-            prepared_candidates=prepared_candidates,
-            strict_eval=lambda name, decoded_agvs: self._strict_candidate_from_agvs(wolf, name, decoded_agvs),
-            top_k=None,
-        )
+        candidate_best = self._evaluate_strategy_candidates(prepared_candidates, top_k=None)
         candidate_name = getattr(candidate_best, "_candidate_name", None) if candidate_best is not None else None
 
         if candidate_best is not None and candidate_best.fitness < wolf.fitness:
             print(
                 f"  [besiege improved] F {wolf.fitness:.1f} -> {candidate_best.fitness:.1f} "
-                f"(levy={levy_step:.2f}, {candidate_name})"
+                f"(levy={levy_step:.2f}, {dominant}, {candidate_name})"
             )
             return candidate_best
         return wolf

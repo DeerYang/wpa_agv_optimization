@@ -242,6 +242,70 @@ class IncrementalEvaluatorTests(unittest.TestCase):
         self.assertEqual(prepared_calls[0][1], "stable")
         self.assertTrue(prepared_calls[0][2])
 
+    def test_dominant_objective_component_uses_weighted_cost_pressure(self) -> None:
+        operators = WPAOperators(evaluator=None)
+        wolf = _build_wolf([[self.tasks[0], self.tasks[1]], [self.tasks[2]]])
+        wolf.vehicle_num = 2
+        wolf.total_dist = 120
+        wolf.time_penalty = 35
+        wolf.conflict_count = 4
+        wolf.replan_count = 1
+        wolf.deadlock_risk_count = 0
+
+        self.assertEqual(operators._dominant_objective_component(wolf), "time")
+
+    def test_prepare_strategy_candidate_separates_decode_and_eval_bases(self) -> None:
+        operators = WPAOperators(evaluator=None)
+        wolf = _build_wolf([[self.tasks[0], self.tasks[1], self.tasks[2]]])
+        alpha = _build_wolf([[self.tasks[2], self.tasks[0], self.tasks[1]]])
+        prepare_calls = []
+
+        def fake_prepare(name, task_seq, decoder="cost_based", base_wolf=None):
+            prepare_calls.append((name, decoder, base_wolf, [task.id for task in task_seq]))
+            return (name, object(), 10.0)
+
+        with mock.patch.object(operators, "_prepare_candidate", side_effect=fake_prepare):
+            prepared = operators._prepare_strategy_candidate(
+                "alpha-follow",
+                [self.tasks[0], self.tasks[1], self.tasks[2]],
+                decoder="stable",
+                decode_base_wolf=alpha,
+                eval_base_wolf=wolf,
+            )
+
+        self.assertIsNotNone(prepared)
+        self.assertEqual(prepare_calls[0][0], "alpha-follow")
+        self.assertEqual(prepare_calls[0][1], "stable")
+        self.assertIs(prepare_calls[0][2], alpha)
+        self.assertIs(prepared["eval_base_wolf"], wolf)
+
+    def test_follow_shape_base_prefers_lower_vehicle_layout(self) -> None:
+        operators = WPAOperators(evaluator=None)
+        low_vehicle = _build_wolf([[self.tasks[0], self.tasks[1]], [self.tasks[2]]])
+        high_vehicle = _build_wolf([[self.tasks[0]], [self.tasks[1]], [self.tasks[2]]])
+        low_vehicle.vehicle_num = 2
+        high_vehicle.vehicle_num = 3
+
+        self.assertIs(operators._follow_shape_base(low_vehicle, high_vehicle), low_vehicle)
+        self.assertIs(operators._follow_shape_base(high_vehicle, low_vehicle), low_vehicle)
+
+    def test_shorten_bottleneck_route_reorders_tasks_to_reduce_route_cost(self) -> None:
+        operators = WPAOperators(evaluator=None)
+        t1 = Task(10, 1, 1, 10, 50)
+        t2 = Task(11, 9, 9, 10, 80)
+        t3 = Task(12, 2, 2, 10, 60)
+        wolf = _build_wolf([[t1, t2, t3]])
+        agv = wolf.agv_list[0]
+        before = operators._estimate_route_cost(agv.tasks, agv.start_pos)
+
+        candidate = operators._shorten_bottleneck_route_sequence(wolf)
+
+        self.assertIsNotNone(candidate)
+        after = operators._estimate_route_cost(candidate, agv.start_pos)
+        self.assertLess(after, before)
+        self.assertEqual(sorted(task.id for task in candidate), [10, 11, 12])
+
 
 if __name__ == "__main__":
     unittest.main()
+
