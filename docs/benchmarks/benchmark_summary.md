@@ -42,6 +42,6 @@
 
 ## Current Batches
 
-- Latest original batch: `2026-04-02 18:12:07 [paper-original-oscillation-guard][original]`
-- Latest improved batch: `2026-04-02 18:24:05 [paper-original-oscillation-guard][improved]`
+- Latest original batch: `2026-04-02 19:23:40 [frontend-export-refresh][original]`
+- Latest improved batch: `2026-04-02 19:18:39 [frontend-export-refresh][improved]`
 - Raw rows file: `docs/benchmarks/benchmark_runs.csv`

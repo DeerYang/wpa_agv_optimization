@@ -112,6 +112,7 @@ body {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  position: relative;
 }
 
 .demo-btn {
@@ -133,15 +134,57 @@ body {
   background: rgba(99, 102, 241, 0.08);
 }
 
+.header-right .sample-picker::after {
+  content: "";
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--text-secondary);
+  border-bottom: 1.5px solid var(--text-secondary);
+  transform: translateY(-60%) rotate(45deg);
+  pointer-events: none;
+}
+
+#algorithm-select,
 #sample-select {
   min-width: 124px;
-  padding: 6px 12px;
+  padding: 6px 30px 6px 12px;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 0.85rem;
+  line-height: 1.2;
+  appearance: none;
+  -webkit-appearance: none;
+  outline: none;
+  color-scheme: dark;
+  transition: border-color var(--transition), box-shadow var(--transition), background-color var(--transition);
+}
+
+#algorithm-select {
+  min-width: 104px;
+}
+
+#algorithm-select:hover,
+#sample-select:hover {
+  border-color: var(--border-glow);
+  background: var(--bg-card);
+}
+
+#algorithm-select:focus,
+#sample-select:focus {
+  border-color: var(--accent-1);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.14);
+}
+
+#algorithm-select option,
+#sample-select option {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
 }
 
 .badge {

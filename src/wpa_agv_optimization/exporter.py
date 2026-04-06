@@ -5,10 +5,76 @@
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .config import Config
+
+
+def normalize_variant_key(variant_key: str) -> str:
+    """Normalize one frontend algorithm key into a filesystem-safe name."""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", str(variant_key).strip())
+    cleaned = cleaned.strip(".-")
+    if not cleaned:
+        raise ValueError("算法标识不能为空")
+    return cleaned
+
+
+def get_frontend_data_dir(project_root: Optional[Path] = None) -> Path:
+    """Return the frontend data root directory."""
+    base_root = project_root or Path(__file__).resolve().parents[2]
+    return base_root / "frontend" / "data"
+
+
+def build_frontend_output_path(
+    variant_key: str,
+    filename: str,
+    *,
+    project_root: Optional[Path] = None,
+) -> Path:
+    """Build one frontend data output path under the algorithm-specific folder."""
+    safe_key = normalize_variant_key(variant_key)
+    data_root = get_frontend_data_dir(project_root=project_root)
+    return data_root / safe_key / filename
+
+
+def _update_frontend_manifest(data_root: Path, variant_key: str, filename: str) -> None:
+    """Record available frontend data files for one algorithm variant."""
+    manifest_path = data_root / "manifest.json"
+    manifest = {"variants": []}
+    if manifest_path.exists():
+        with manifest_path.open("r", encoding="utf-8") as handle:
+            loaded = json.load(handle)
+        if isinstance(loaded, dict) and isinstance(loaded.get("variants"), list):
+            manifest = loaded
+
+    safe_key = normalize_variant_key(variant_key)
+    entries = {
+        item["key"]: {
+            "key": item["key"],
+            "label": item.get("label", item["key"]),
+            "files": list(item.get("files", [])),
+        }
+        for item in manifest["variants"]
+        if isinstance(item, dict) and "key" in item
+    }
+
+    entry = entries.setdefault(
+        safe_key,
+        {
+            "key": safe_key,
+            "label": safe_key,
+            "files": [],
+        },
+    )
+    if filename not in entry["files"]:
+        entry["files"].append(filename)
+        entry["files"].sort()
+
+    manifest["variants"] = [entries[key] for key in sorted(entries.keys())]
+    with manifest_path.open("w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, ensure_ascii=False, indent=2)
 
 
 def export_result_json(
@@ -20,6 +86,8 @@ def export_result_json(
     algorithm: str = "improved",
     seed: Optional[int] = None,
     output_path: Optional[str] = None,
+    variant_key: Optional[str] = None,
+    project_root: Optional[str] = None,
 ) -> str:
     """将最优狼个体导出为前端可消费的 JSON 文件。
 
@@ -40,7 +108,11 @@ def export_result_json(
     seed : int, optional
         随机种子。
     output_path : str, optional
-        输出文件路径, 默认为 frontend/data/result.json。
+        输出文件路径, 默认为 frontend/data/<algorithm>/result.json。
+    variant_key : str, optional
+        前端目录下的算法键, 默认为 algorithm。
+    project_root : str, optional
+        项目根目录覆盖值, 主要用于测试。
 
     Returns
     -------
@@ -109,15 +181,22 @@ def export_result_json(
     }
 
     # 写入文件
+    selected_variant_key = normalize_variant_key(variant_key or algorithm)
+    resolved_project_root = Path(project_root) if project_root is not None else None
+    data_root = get_frontend_data_dir(project_root=resolved_project_root)
     if output_path is None:
-        project_root = Path(__file__).resolve().parents[2]
-        output_dir = project_root / "frontend" / "data"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = str(output_dir / "result.json")
+        output_path = str(
+            build_frontend_output_path(
+                selected_variant_key,
+                "result.json",
+                project_root=resolved_project_root,
+            )
+        )
 
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
+    _update_frontend_manifest(data_root, selected_variant_key, out.name)
 
     return str(out)

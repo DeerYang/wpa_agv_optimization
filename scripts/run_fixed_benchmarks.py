@@ -1,4 +1,4 @@
-﻿"""Fixed-scenario benchmark runner with multi-metric outputs."""
+"""Fixed-scenario benchmark runner with multi-metric outputs."""
 
 from __future__ import annotations
 
@@ -17,7 +17,8 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from wpa_agv_optimization.main import result_to_metrics, run_algorithm
+from wpa_agv_optimization.exporter import build_frontend_output_path, export_result_json
+from wpa_agv_optimization.main import load_scenario, result_to_metrics, run_algorithm
 
 CSV_FIELDS = [
     "date",
@@ -90,6 +91,7 @@ def run_one_task(task: dict) -> dict:
         algorithm=task["algorithm"],
         verbose=False,
         allow_interactive=False,
+        export_json=False,
     )
     metrics = result_to_metrics(result)
     return {
@@ -107,6 +109,48 @@ def run_one_task(task: dict) -> dict:
         "deadlock_count": int(metrics["deadlock_count"]),
         "reroute_count": int(metrics["reroute_count"]),
     }
+
+
+def select_best_rows_by_scenario(rows: list[dict]) -> dict[int, dict]:
+    """Pick the lowest-fitness run for each scenario."""
+    best_rows: dict[int, dict] = {}
+    for row in rows:
+        scenario = row["scenario"]
+        current_best = best_rows.get(scenario)
+        if current_best is None or row["F"] < current_best["F"]:
+            best_rows[scenario] = row
+    return best_rows
+
+
+def export_best_scenario_examples(rows: list[dict], algorithm: str, project_root: Path = PROJECT_ROOT) -> None:
+    """Export one best-of-batch example JSON for each benchmark scenario."""
+    for scenario, row in sorted(select_best_rows_by_scenario(rows).items()):
+        result = run_algorithm(
+            scenario=scenario,
+            seed=row["seed"],
+            algorithm=algorithm,
+            verbose=False,
+            allow_interactive=False,
+            export_json=False,
+        )
+        grid_map, task_list, _ = load_scenario(scenario)
+        output_path = build_frontend_output_path(
+            algorithm,
+            f"scenario-{scenario}.json",
+            project_root=project_root,
+        )
+        export_result_json(
+            wolf=result.wolf,
+            grid_map=grid_map,
+            task_list=task_list,
+            convergence=[],
+            scenario_name=result.scenario_name,
+            algorithm=algorithm,
+            seed=result.seed,
+            output_path=str(output_path),
+            variant_key=algorithm,
+            project_root=str(project_root),
+        )
 
 
 def append_csv(csv_path: str, rows: list[dict]) -> None:
@@ -305,6 +349,7 @@ def main() -> None:
     append_csv(args.csv, rows_to_append)
     all_rows = read_csv_rows(args.csv)
     write_markdown(args.md, all_rows)
+    export_best_scenario_examples(results, args.algorithm)
 
     summary = summarize_by_scenario(rows_to_append)
     print("\n=== Batch Summary ===")

@@ -1,0 +1,24 @@
+{
+  "variants": [
+    {
+      "key": "improved",
+      "label": "improved",
+      "files": [
+        "result.json",
+        "scenario-1.json",
+        "scenario-2.json",
+        "scenario-3.json"
+      ]
+    },
+    {
+      "key": "original",
+      "label": "original",
+      "files": [
+        "result.json",
+        "scenario-1.json",
+        "scenario-2.json",
+        "scenario-3.json"
+      ]
+    }
+  ]
+}

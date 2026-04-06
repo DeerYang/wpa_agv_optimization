@@ -17,6 +17,11 @@ const {
   summarizeAtTime,
   buildEventTimeline,
 } = window.AnalysisUtils;
+const {
+  buildAlgorithmOptions,
+  buildDataPath,
+  buildSourceLabel,
+} = window.DataSourceUtils;
 
 const AGV_COLORS = [
   "#6366f1", "#06b6d4", "#22c55e", "#f59e0b", "#ef4444",
@@ -37,6 +42,7 @@ let isolateFocus = false;
 let showTrails = true;
 let showTaskLabels = true;
 let currentDataSource = "—";
+let currentAlgorithmKey = "improved";
 
 const mapCanvas = document.getElementById("map-canvas");
 const mapCtx = mapCanvas.getContext("2d");
@@ -49,6 +55,7 @@ const btnStepBack = document.getElementById("btn-step-back");
 const btnReset = document.getElementById("btn-reset");
 const btnClearFocus = document.getElementById("btn-clear-focus");
 const speedSelect = document.getElementById("speed-select");
+const algorithmSelect = document.getElementById("algorithm-select");
 const sampleSelect = document.getElementById("sample-select");
 const progressBar = document.getElementById("progress-bar");
 const timeDisplay = document.getElementById("time-display");
@@ -64,6 +71,11 @@ const eventTimelineEl = document.getElementById("event-timeline");
 const focusBadge = document.getElementById("focus-badge");
 const focusDetail = document.getElementById("focus-detail");
 const runSourceEl = document.getElementById("run-source");
+
+algorithmSelect.addEventListener("change", async () => {
+  currentAlgorithmKey = algorithmSelect.value;
+  await loadSelectedSource();
+});
 
 sampleSelect.addEventListener("change", async () => {
   await loadSelectedSource();
@@ -252,25 +264,52 @@ async function fetchJson(path) {
   return response.json();
 }
 
+async function fetchManifest() {
+  try {
+    return await fetchJson("data/manifest.json");
+  } catch (error) {
+    return null;
+  }
+}
+
+function updateAlgorithmOptions(options) {
+  const currentValue = currentAlgorithmKey;
+  algorithmSelect.innerHTML = "";
+  for (const option of options) {
+    const el = document.createElement("option");
+    el.value = option.key;
+    el.textContent = option.label;
+    algorithmSelect.appendChild(el);
+  }
+  const availableKeys = options.map((option) => option.key);
+  currentAlgorithmKey = availableKeys.includes(currentValue) ? currentValue : availableKeys[0];
+  algorithmSelect.value = currentAlgorithmKey;
+}
+
+async function initializeDataSelectors() {
+  const manifest = await fetchManifest();
+  updateAlgorithmOptions(buildAlgorithmOptions(manifest));
+}
+
 async function loadLatestResult() {
   try {
     sampleSelect.value = "latest";
-    currentDataSource = "最后运行结果";
-    loadData(await fetchJson("data/result.json"));
+    currentDataSource = buildSourceLabel("latest");
+    loadData(await fetchJson(buildDataPath(currentAlgorithmKey, "latest")));
   } catch (error) {
     currentDataSource = "—";
-    alert(`加载最近结果失败: ${error.message}\n请先运行算法生成 frontend/data/result.json`);
+    alert(`加载 ${currentAlgorithmKey} 的最后运行结果失败: ${error.message}\n请先运行该算法生成 frontend/data/${currentAlgorithmKey}/result.json`);
   }
 }
 
 async function loadSampleScenario(scenarioId) {
   try {
     sampleSelect.value = String(scenarioId);
-    currentDataSource = `示例场景 ${scenarioId}`;
-    loadData(await fetchJson(`data/scenario-${scenarioId}.json`));
+    currentDataSource = buildSourceLabel(String(scenarioId));
+    loadData(await fetchJson(buildDataPath(currentAlgorithmKey, String(scenarioId))));
   } catch (error) {
     currentDataSource = "—";
-    alert(`加载示例场景 ${scenarioId} 失败: ${error.message}`);
+    alert(`加载 ${currentAlgorithmKey} 的示例场景 ${scenarioId} 失败: ${error.message}`);
   }
 }
 
@@ -920,5 +959,11 @@ function getCssVar(name) {
   return getComputedStyle(document.body).getPropertyValue(name);
 }
 
+async function initializeApp() {
+  resizeCanvases();
+  await initializeDataSelectors();
+  await loadSelectedSource();
+}
+
 resizeCanvases();
-loadSelectedSource();
+initializeApp();

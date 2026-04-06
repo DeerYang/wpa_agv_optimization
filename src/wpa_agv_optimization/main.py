@@ -192,7 +192,16 @@ def _run_original_paper_algorithm(grid_map, task_list, max_iter, *, verbose: boo
 
 
 
-def _run_algorithm_impl(scenario: int | None, seed: int | None, algorithm: str, allow_interactive: bool) -> RunResult:
+def _run_algorithm_impl(
+    scenario: int | None,
+    seed: int | None,
+    algorithm: str,
+    allow_interactive: bool,
+    *,
+    export_json: bool,
+    export_output_path: str | None,
+    variant_key: str | None,
+) -> RunResult:
     """Execute one full optimization run and return the final structured result."""
     if seed is not None:
         random.seed(seed)
@@ -292,16 +301,19 @@ def _run_algorithm_impl(scenario: int | None, seed: int | None, algorithm: str, 
         )
         print(f"      任务执行顺序：{agv.tasks}")
 
-    json_path = export_result_json(
-        wolf=global_best_wolf,
-        grid_map=grid_map,
-        task_list=task_list,
-        convergence=convergence,
-        scenario_name=scenario_name,
-        algorithm=algorithm,
-        seed=seed,
-    )
-    print(f"\n  前端可视化数据已导出到: {json_path}")
+    if export_json:
+        json_path = export_result_json(
+            wolf=global_best_wolf,
+            grid_map=grid_map,
+            task_list=task_list,
+            convergence=convergence,
+            scenario_name=scenario_name,
+            algorithm=algorithm,
+            seed=seed,
+            output_path=export_output_path,
+            variant_key=variant_key or algorithm,
+        )
+        print(f"\n  前端可视化数据已导出到: {json_path}")
 
     return RunResult(
         algorithm=algorithm,
@@ -329,6 +341,9 @@ def run_algorithm(
     *,
     verbose: bool = True,
     allow_interactive: bool = False,
+    export_json: bool = True,
+    export_output_path: str | None = None,
+    variant_key: str | None = None,
 ) -> RunResult:
     """Reusable API for one run.
 
@@ -336,7 +351,15 @@ def run_algorithm(
     stdout parsing overhead.
     """
     with _suppress_stdout(not verbose):
-        return _run_algorithm_impl(scenario, seed, algorithm, allow_interactive)
+        return _run_algorithm_impl(
+            scenario,
+            seed,
+            algorithm,
+            allow_interactive,
+            export_json=export_json,
+            export_output_path=export_output_path,
+            variant_key=variant_key,
+        )
 
 
 

@@ -28,6 +28,13 @@
     </div>
     <div class="header-right">
       <div class="sample-picker">
+        <label for="algorithm-select" class="sr-only">选择算法</label>
+        <select id="algorithm-select" aria-label="选择算法">
+          <option value="improved" selected>improved</option>
+          <option value="original">original</option>
+        </select>
+      </div>
+      <div class="sample-picker">
         <label for="sample-select" class="sr-only">选择数据来源</label>
         <select id="sample-select" aria-label="选择数据来源">
           <option value="latest" selected>最后运行结果</option>
@@ -197,6 +204,7 @@
   </main>
 
   <script src="analysis.js"></script>
+  <script src="data-sources.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
