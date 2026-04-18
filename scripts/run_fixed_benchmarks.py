@@ -36,6 +36,7 @@ CSV_FIELDS = [
     "deadlock_risk_count",
     "deadlock_count",
     "reroute_count",
+    "unfinished_count",
 ]
 
 MAIN_SCENARIOS = [1, 2, 3]
@@ -108,6 +109,7 @@ def run_one_task(task: dict) -> dict:
         "deadlock_risk_count": int(metrics["deadlock_risk_count"]),
         "deadlock_count": int(metrics["deadlock_count"]),
         "reroute_count": int(metrics["reroute_count"]),
+        "unfinished_count": int(metrics["unfinished_count"]),
     }
 
 
@@ -157,6 +159,14 @@ def append_csv(csv_path: str, rows: list[dict]) -> None:
     csv_file = Path(csv_path)
     csv_file.parent.mkdir(parents=True, exist_ok=True)
     file_exists = csv_file.exists()
+    if file_exists:
+        with csv_file.open("r", encoding="utf-8-sig", newline="") as handle:
+            existing_header = next(csv.reader(handle), [])
+        if existing_header and existing_header != CSV_FIELDS:
+            raise ValueError(
+                f"CSV schema mismatch: existing={existing_header} vs expected={CSV_FIELDS}. "
+                f"Migrate {csv_path} before appending."
+            )
     with csv_file.open("a", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS)
         if not file_exists:
@@ -190,6 +200,7 @@ def read_csv_rows(csv_path: str) -> list[dict]:
                     "deadlock_risk_count": int(normalized.get("deadlock_risk_count", 0)),
                     "deadlock_count": int(normalized.get("deadlock_count", 0)),
                     "reroute_count": int(normalized.get("reroute_count", 0)),
+                    "unfinished_count": int(normalized.get("unfinished_count", 0)),
                 }
             )
         return rows

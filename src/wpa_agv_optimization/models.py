@@ -90,3 +90,5 @@ class Wolf:
         self.replan_count = 0
         # 局部改道触发次数统计。
         self.reroute_count = 0
+        # 未完成客户任务数（所有 AGV 加总）。
+        self.unfinished_count = 0

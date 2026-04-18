@@ -38,3 +38,4 @@ docs/private-thesis/
 
 .tmp
 tests/_tmp/
+.claude/

@@ -39,6 +39,7 @@ class RunResult:
     deadlock_risk_count: int
     replan_count: int
     reroute_count: int
+    unfinished_count: int
     wolf: Any
 
 
@@ -294,6 +295,7 @@ def _run_algorithm_impl(
     print(f"    准死锁风险触发次数={getattr(global_best_wolf, 'deadlock_risk_count', 0)}")
     print(f"    重规划触发次数={getattr(global_best_wolf, 'replan_count', 0)}")
     print(f"    局部改道触发次数={getattr(global_best_wolf, 'reroute_count', 0)}")
+    print(f"    未完成客户任务数={getattr(global_best_wolf, 'unfinished_count', 0)}")
     print("  方案详情：")
     for agv in global_best_wolf.agv_list:
         print(
@@ -329,6 +331,7 @@ def _run_algorithm_impl(
         deadlock_risk_count=int(getattr(global_best_wolf, "deadlock_risk_count", 0)),
         replan_count=int(getattr(global_best_wolf, "replan_count", 0)),
         reroute_count=int(getattr(global_best_wolf, "reroute_count", 0)),
+        unfinished_count=int(getattr(global_best_wolf, "unfinished_count", 0)),
         wolf=global_best_wolf,
     )
 

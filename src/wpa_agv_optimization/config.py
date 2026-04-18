@@ -29,9 +29,11 @@ class Config:
     # C: 冲突处理次数
     # R: 重规划次数
     # Q: 准死锁风险触发次数
+    # U: 未完成客户任务数
     W1_DIST = 1.0
     W2_NUM = 150.0
     W3_TIME = 10.0
     W4_CONFLICT = 4.0
     W5_REPLAN = 10.0
     W6_RISK = 3.0
+    W7_UNFINISHED = 500.0

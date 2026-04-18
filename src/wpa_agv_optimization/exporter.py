@@ -176,6 +176,7 @@ def export_result_json(
             "deadlock_risk_count": int(getattr(wolf, "deadlock_risk_count", 0)),
             "replan_count": int(getattr(wolf, "replan_count", 0)),
             "reroute_count": int(getattr(wolf, "reroute_count", 0)),
+            "unfinished_count": int(getattr(wolf, "unfinished_count", 0)),
         },
         "convergence": convergence or [],
     }

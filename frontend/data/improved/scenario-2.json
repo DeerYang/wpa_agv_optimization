@@ -1777,7 +1777,8 @@
     "deadlock_count": 0,
     "deadlock_risk_count": 130,
     "replan_count": 130,
-    "reroute_count": 0
+    "reroute_count": 0,
+    "unfinished_count": 0
   },
   "convergence": []
 }

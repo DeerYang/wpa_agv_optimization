@@ -155,6 +155,7 @@ class WolfEvaluator:
             "deadlock_risk_count": 0,
             "replan_count": 0,
             "reroute_count": 0,
+            "total_unfinished": 0,
             "pair_repeat_counts": {},
             "resource_repeat_counts": {},
             "start_idx": 0,
@@ -187,6 +188,7 @@ class WolfEvaluator:
             state["deadlock_risk_count"] += int(cached_metrics.get("deadlock_risk_count", 0))
             state["replan_count"] += int(cached_metrics.get("replan_count", 0))
             state["reroute_count"] += int(cached_metrics.get("reroute_count", 0))
+            state["total_unfinished"] += int(cached_metrics.get("unfinished_count", 0))
 
         return state
 
@@ -288,6 +290,7 @@ class WolfEvaluator:
         deadlock_risk_count = state["deadlock_risk_count"]
         replan_count = state["replan_count"]
         reroute_count = state["reroute_count"]
+        total_unfinished = state["total_unfinished"]
         pair_repeat_counts = state["pair_repeat_counts"]
         resource_repeat_counts = state["resource_repeat_counts"]
         start_idx = state["start_idx"]
@@ -309,12 +312,14 @@ class WolfEvaluator:
             agv_replan_count = 0
             agv_reroute_count = 0
             agv_time_penalty = 0
+            agv_unfinished_count = 0
+            agv_aborted = False
 
             targets = list(agv.tasks)
             if agv.tasks:
                 targets.append(None)
 
-            for target in targets:
+            for target_idx, target in enumerate(targets):
                 target_pos = Config.DEPOT_NODE if target is None else (target.x, target.y)
                 max_retries = 8
                 retries = 0
@@ -446,8 +451,13 @@ class WolfEvaluator:
                     retries += 1
 
                 if segment_path is None:
-                    agv_time_penalty += 10000
-                    segment_path = [(target_pos[0], target_pos[1], curr_time + 10)]
+                    # 规划彻底失败：AGV 停机，避免瞬移污染时空占用表
+                    if target is not None:
+                        # 当前失败的客户任务及其后所有客户任务都算未完成（depot 不算）
+                        remaining = targets[target_idx:]
+                        agv_unfinished_count = sum(1 for item in remaining if item is not None)
+                    agv_aborted = True
+                    break
 
                 if full_path:
                     full_path.extend(segment_path[1:])
@@ -483,6 +493,11 @@ class WolfEvaluator:
                 self.traffic_manager.clear_wait_dependency(agv.id)
                 wait_counts[agv.id] = 0
 
+            if agv_aborted:
+                # 停机后同样要清理 wait graph，避免残留依赖影响后续 AGV 的死锁检测
+                self.traffic_manager.clear_wait_dependency(agv.id)
+                wait_counts[agv.id] = 0
+
             agv.path = full_path
             agv.finish_time = curr_time
             agv._task_signature = self._task_signature(agv)
@@ -496,6 +511,7 @@ class WolfEvaluator:
                 "deadlock_risk_count": agv_deadlock_risk_count,
                 "replan_count": agv_replan_count,
                 "reroute_count": agv_reroute_count,
+                "unfinished_count": agv_unfinished_count,
             }
 
             total_dist += len(full_path)
@@ -505,6 +521,7 @@ class WolfEvaluator:
             deadlock_risk_count += agv_deadlock_risk_count
             replan_count += agv_replan_count
             reroute_count += agv_reroute_count
+            total_unfinished += agv_unfinished_count
 
         wolf.total_dist = total_dist
         wolf.time_penalty = total_time_penalty
@@ -516,6 +533,7 @@ class WolfEvaluator:
             + (Config.W4_CONFLICT * conflict_count)
             + (Config.W5_REPLAN * replan_count)
             + (Config.W6_RISK * deadlock_risk_count)
+            + (Config.W7_UNFINISHED * total_unfinished)
         )
 
         wolf.conflict_count = conflict_count
@@ -523,6 +541,7 @@ class WolfEvaluator:
         wolf.deadlock_risk_count = deadlock_risk_count
         wolf.replan_count = replan_count
         wolf.reroute_count = reroute_count
+        wolf.unfinished_count = total_unfinished
         wolf._cache_ready = True
         return wolf
 
