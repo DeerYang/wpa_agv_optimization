@@ -68,10 +68,13 @@ def compute_d_near(mins: np.ndarray, maxs: np.ndarray, omega: float) -> float:
 
 
 def _open_next_agv(curr_agv_id: int) -> tuple[int, AGV]:
-    curr_agv_id += 1
-    if curr_agv_id >= len(Config.START_NODES):
-        curr_agv_id = 0
-    return curr_agv_id, AGV(agv_id=curr_agv_id, start_pos=Config.START_NODES[curr_agv_id])
+    next_id = curr_agv_id + 1
+    if next_id >= len(Config.START_NODES):
+        raise ValueError(
+            f"AGV 数超出起点槽位上限 {len(Config.START_NODES)}，"
+            f"任务过多或容量过小；需扩展 Config.START_NODES 或调整任务集"
+        )
+    return next_id, AGV(agv_id=next_id, start_pos=Config.START_NODES[next_id])
 
 
 

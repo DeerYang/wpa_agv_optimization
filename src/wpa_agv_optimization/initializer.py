@@ -26,10 +26,13 @@ class PopulationInitializer:
 
     def _open_next_agv(self, curr_agv_id):
         """Open the next AGV slot used by greedy initialization."""
-        curr_agv_id += 1
-        if curr_agv_id >= len(Config.START_NODES):
-            curr_agv_id = 0
-        return curr_agv_id, AGV(agv_id=curr_agv_id, start_pos=Config.START_NODES[curr_agv_id])
+        next_id = curr_agv_id + 1
+        if next_id >= len(Config.START_NODES):
+            raise ValueError(
+                f"AGV 数超出起点槽位上限 {len(Config.START_NODES)}，"
+                f"任务过多或容量过小；需扩展 Config.START_NODES 或调整任务集"
+            )
+        return next_id, AGV(agv_id=next_id, start_pos=Config.START_NODES[next_id])
 
     def _create_one_wolf(self):
         """Create one initial wolf by Tent order plus greedy assignment."""
