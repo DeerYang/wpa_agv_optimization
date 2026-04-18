@@ -14,7 +14,7 @@ import random
 import numpy as np
 from scipy.special import gamma
 
-from .config import Config
+from .config import Config, ImprovedOperatorConfig
 from .models import AGV, Wolf
 from .utils import manhattan_dist
 
@@ -22,8 +22,9 @@ from .utils import manhattan_dist
 class WPAOperators:
     """Collection of improved and original WPA operators."""
 
-    def __init__(self, evaluator):
+    def __init__(self, evaluator, operator_config: ImprovedOperatorConfig | None = None):
         self.evaluator = evaluator
+        self.op_config = operator_config or ImprovedOperatorConfig()
 
     def _flatten_tasks(self, wolf):
         """Flatten all AGV task lists into one global sequence."""
@@ -1090,8 +1091,13 @@ class WPAOperators:
         if not alpha_wolf.agv_list or not wolf.agv_list:
             return wolf
 
+        cfg = self.op_config
         fitness_gap = max(0.0, float(wolf.fitness) - float(alpha_wolf.fitness))
-        activation_prob = 0.45 if fitness_gap < 120.0 else 0.7
+        activation_prob = (
+            cfg.summoning_prob_close
+            if fitness_gap < cfg.summoning_gap_threshold
+            else cfg.summoning_prob_far
+        )
         if random.random() > activation_prob:
             return wolf
 
@@ -1172,7 +1178,11 @@ class WPAOperators:
         if len(current_seq) < 2 or len(current_seq) != len(alpha_seq):
             return wolf
 
-        activation_prob = 0.35 if curr_iter < max_iter // 3 else 0.6
+        cfg = self.op_config
+        early_cutoff = max_iter // cfg.besieging_early_phase_divisor
+        activation_prob = (
+            cfg.besieging_prob_early if curr_iter < early_cutoff else cfg.besieging_prob_late
+        )
         if random.random() > activation_prob:
             return wolf
 

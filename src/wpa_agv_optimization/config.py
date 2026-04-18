@@ -1,5 +1,7 @@
 ﻿"""全局配置模块。"""
 
+from dataclasses import dataclass
+
 
 class Config:
     """Project-wide static configuration."""
@@ -37,3 +39,24 @@ class Config:
     W5_REPLAN = 10.0
     W6_RISK = 3.0
     W7_UNFINISHED = 500.0
+
+
+@dataclass
+class ImprovedOperatorConfig:
+    """
+    Improved 算子的概率 gate 超参数。
+
+    集中 summoning / besieging 里原本硬编码的激活概率与阈值，便于论文里做
+    消融实验（把任一概率置为 1.0 即关闭 gate，保持算子每代必跑）。
+    默认值等价于重构前的硬编码行为。
+    """
+
+    # summoning: 按当前狼与头狼的 fitness gap 切换激活概率
+    summoning_gap_threshold: float = 120.0
+    summoning_prob_close: float = 0.45  # gap < threshold 时的激活概率
+    summoning_prob_far: float = 0.7     # gap >= threshold 时的激活概率
+
+    # besieging: 按迭代阶段切换激活概率，早期阶段 = curr_iter < max_iter // divisor
+    besieging_early_phase_divisor: int = 3
+    besieging_prob_early: float = 0.35
+    besieging_prob_late: float = 0.6
