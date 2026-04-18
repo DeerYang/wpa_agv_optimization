@@ -23,7 +23,7 @@ env/
 build/
 dist/
 *.egg-info/
-frontend/data/result.json
+frontend/data/**/result.json
 test_result.txt
 
 # Thesis docs
@@ -35,3 +35,6 @@ test_result.txt
 docs/superpower/
 docs/paper-source/
 docs/private-thesis/
+
+.tmp
+tests/_tmp/
