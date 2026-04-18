@@ -9,7 +9,6 @@ Both variants reuse the same evaluation, path planning, and conflict handling
 pipeline so benchmark comparisons stay fair.
 """
 
-import copy
 import random
 
 import numpy as np
@@ -1088,8 +1087,7 @@ class WPAOperators:
 
     def summoning(self, wolf, alpha_wolf):
         """Improved summoning: inherit alpha structures that target the dominant F component."""
-        alpha_copy = copy.deepcopy(alpha_wolf)
-        if not alpha_copy.agv_list or not wolf.agv_list:
+        if not alpha_wolf.agv_list or not wolf.agv_list:
             return wolf
 
         fitness_gap = max(0.0, float(wolf.fitness) - float(alpha_wolf.fitness))
@@ -1097,14 +1095,14 @@ class WPAOperators:
         if random.random() > activation_prob:
             return wolf
 
-        alpha_tasks = self._flatten_tasks(alpha_copy)
+        alpha_tasks = self._flatten_tasks(alpha_wolf)
         wolf_tasks = self._flatten_tasks(wolf)
         if len(alpha_tasks) < 2 or len(wolf_tasks) < 2:
             return wolf
 
         dominant = self._dominant_objective_component(alpha_wolf)
         follow_base = self._follow_shape_base(wolf, alpha_wolf)
-        alpha_cluster = self._choose_alpha_cluster(alpha_copy, seg_len_min=2, seg_len_max=4)
+        alpha_cluster = self._choose_alpha_cluster(alpha_wolf, seg_len_min=2, seg_len_max=4)
         alpha_priority_ids = self._alpha_priority_task_ids(alpha_wolf, dominant, max_tasks=4)
         candidates = []
 

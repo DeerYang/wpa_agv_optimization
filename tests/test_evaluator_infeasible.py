@@ -7,7 +7,6 @@ from unittest import mock
 
 import numpy as np
 
-from src.wpa_agv_optimization import evaluator as evaluator_module
 from src.wpa_agv_optimization.config import Config
 from src.wpa_agv_optimization.evaluator import WolfEvaluator
 from src.wpa_agv_optimization.models import AGV, Task, Wolf
@@ -25,11 +24,6 @@ def _build_wolf(task_groups: list[list[Task]]) -> Wolf:
     return wolf
 
 
-def _fixed_tent_iter(x0=0.4):
-    while True:
-        yield 0.0
-
-
 class EvaluatorInfeasibleTests(unittest.TestCase):
     def setUp(self) -> None:
         self.grid_map = np.zeros((20, 20), dtype=int)
@@ -44,8 +38,7 @@ class EvaluatorInfeasibleTests(unittest.TestCase):
         evaluator = WolfEvaluator(self.grid_map)
         wolf = _build_wolf([[self.tasks[0], self.tasks[1], self.tasks[2]]])
 
-        with mock.patch.object(evaluator_module, "tent_map_iter", side_effect=_fixed_tent_iter), \
-             mock.patch.object(evaluator.planner, "plan", return_value=None):
+        with mock.patch.object(evaluator.planner, "plan", return_value=None):
             result = evaluator.rebuild_wolf(wolf)
 
         # All three customer tasks are marked unfinished (depot doesn't count here).
@@ -76,8 +69,7 @@ class EvaluatorInfeasibleTests(unittest.TestCase):
                 return None
             return original_plan(start_pos, end_pos, *args, **kwargs)
 
-        with mock.patch.object(evaluator_module, "tent_map_iter", side_effect=_fixed_tent_iter), \
-             mock.patch.object(evaluator.planner, "plan", side_effect=plan_wrap):
+        with mock.patch.object(evaluator.planner, "plan", side_effect=plan_wrap):
             result = evaluator.rebuild_wolf(wolf)
 
         # Customer task completed — no unfinished customer tasks.
@@ -101,8 +93,7 @@ class EvaluatorInfeasibleTests(unittest.TestCase):
                 return original_plan(start_pos, end_pos, *args, **kwargs)
             return None
 
-        with mock.patch.object(evaluator_module, "tent_map_iter", side_effect=_fixed_tent_iter), \
-             mock.patch.object(evaluator.planner, "plan", side_effect=plan_wrap):
+        with mock.patch.object(evaluator.planner, "plan", side_effect=plan_wrap):
             result = evaluator.rebuild_wolf(wolf)
 
         # Task 1 done, tasks 2 and 3 unfinished.

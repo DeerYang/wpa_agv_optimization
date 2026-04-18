@@ -9,15 +9,10 @@ import numpy as np
 from src.wpa_agv_optimization.pathfinding import TentDFSPlanner
 
 
-def _tent_iter():
-    while True:
-        yield 0.0
-
-
 class PlannerBehaviorTests(unittest.TestCase):
     def test_empty_grid_returns_shortest_arrival(self) -> None:
         planner = TentDFSPlanner(np.zeros((20, 20), dtype=int))
-        path = planner.plan((0, 0), (3, 0), 0, set(), _tent_iter())
+        path = planner.plan((0, 0), (3, 0), 0, set())
 
         self.assertIsNotNone(path)
         self.assertEqual(path[-1], (3, 0, 3))
@@ -28,7 +23,7 @@ class PlannerBehaviorTests(unittest.TestCase):
             grid[x][0] = 0
 
         planner = TentDFSPlanner(grid)
-        path = planner.plan((0, 0), (3, 0), 0, {(1, 0, 1)}, _tent_iter())
+        path = planner.plan((0, 0), (3, 0), 0, {(1, 0, 1)})
 
         self.assertIsNotNone(path)
         self.assertEqual(path[:3], [(0, 0, 0), (0, 0, 1), (1, 0, 2)])
@@ -41,7 +36,7 @@ class PlannerBehaviorTests(unittest.TestCase):
                 grid[1][y] = 1
 
         planner = TentDFSPlanner(grid)
-        path = planner.plan((0, 0), (2, 0), 0, set(), _tent_iter())
+        path = planner.plan((0, 0), (2, 0), 0, set())
 
         self.assertIsNotNone(path)
         self.assertEqual(path[-1], (2, 0, 10))

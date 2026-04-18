@@ -1,7 +1,6 @@
 from collections import deque
 import heapq
 import itertools
-import random
 
 from .config import Config
 
@@ -71,7 +70,7 @@ class TentDFSPlanner:
             curr = parent_map[curr]
         return path[::-1]
 
-    def plan(self, start_pos, end_pos, start_time, reservation_table, tent_seq_gen, extra_blocks=None):
+    def plan(self, start_pos, end_pos, start_time, reservation_table, extra_blocks=None):
         extra_blocks = set() if extra_blocks is None else extra_blocks
         start_state = (start_pos, start_time)
         parent_map = {start_state: None}
@@ -144,15 +143,9 @@ class TentDFSPlanner:
             if not move_candidates:
                 continue
 
-            try:
-                tent_val = next(tent_seq_gen)
-            except Exception:
-                tent_val = random.random()
-
-            if tent_val < 0.7:
-                move_candidates.sort(key=lambda item: (item[0], item[1]))
-            else:
-                random.shuffle(move_candidates)
+            # Lexicographic tie-break: lower heuristic first, then non-wait first.
+            # Deterministic — do not shuffle.
+            move_candidates.sort(key=lambda item: (item[0], item[1]))
 
             for heuristic, is_wait, next_state in move_candidates:
                 ntime = next_state[1]

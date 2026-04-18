@@ -7,13 +7,12 @@
 3. 汇总 F/N/D/T 和冲突统计，作为 WPA 的真实评价函数。
 """
 
-import hashlib
 from typing import Dict, List, Optional, Set, Tuple
 
 from .config import Config
 from .pathfinding import TentDFSPlanner
 from .traffic_manager import TrafficManager
-from .utils import manhattan_dist, tent_map_iter
+from .utils import manhattan_dist
 
 
 Node = Tuple[int, int]
@@ -48,24 +47,6 @@ class WolfEvaluator:
     def _task_signature(agv) -> Tuple[int, ...]:
         """Build a stable signature for one AGV task sequence."""
         return tuple(task.id for task in agv.tasks)
-
-    @staticmethod
-    def _derive_chaos_x0(wolf) -> float:
-        """
-        从 wolf 的任务分配结构派生确定性 Tent 混沌起点。
-
-        同一结构的 wolf 永远得到同一个 x0，消除评估顺序对 tie-break 路径的影响。
-        SHA1 保证跨进程/跨机器稳定（Python 内置 hash 不稳定），落在 (0.1, 0.9) 区间
-        避开 Tent 映射的 0/0.5/1 退化点附近。
-        """
-        parts = []
-        for agv in wolf.agv_list:
-            parts.append(f"{agv.start_pos[0]},{agv.start_pos[1]}:")
-            parts.append(",".join(str(task.id) for task in agv.tasks))
-            parts.append(";")
-        digest = hashlib.sha1("".join(parts).encode("utf-8")).digest()
-        value = int.from_bytes(digest[:8], "big")
-        return 0.1 + (value / float(1 << 64)) * 0.8
 
     @staticmethod
     def _temporary_blocks_for_conflict(conflict: Dict[str, object]) -> Set[TimedNode]:
@@ -313,9 +294,6 @@ class WolfEvaluator:
         resource_repeat_counts = state["resource_repeat_counts"]
         start_idx = state["start_idx"]
 
-        x0 = self._derive_chaos_x0(wolf)
-        chaos_iter = tent_map_iter(x0=x0)
-
         for agv in wolf.agv_list[start_idx:]:
             wait_counts.setdefault(agv.id, 0)
             curr_pos = agv.start_pos
@@ -351,7 +329,6 @@ class WolfEvaluator:
                         target_pos,
                         curr_time,
                         reservation_table,
-                        chaos_iter,
                         extra_blocks=temporary_blocks,
                     )
 

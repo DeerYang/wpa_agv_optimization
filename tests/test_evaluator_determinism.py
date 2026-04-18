@@ -1,4 +1,4 @@
-"""Determinism tests: chaos x0 is now derived from the wolf's task assignment."""
+"""Determinism regression: same wolf structure must yield the same fitness."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ def _build_wolf(task_groups: list[list[Task]]) -> Wolf:
     return wolf
 
 
-class DeterministicChaosX0Tests(unittest.TestCase):
+class DeterministicEvaluationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.grid_map = np.zeros((20, 20), dtype=int)
         self.tasks = [
@@ -31,41 +31,11 @@ class DeterministicChaosX0Tests(unittest.TestCase):
             Task(3, 7, 6, 10, 120),
         ]
 
-    def test_same_structure_yields_same_x0(self) -> None:
-        wolf_a = _build_wolf([[self.tasks[0], self.tasks[1]], [self.tasks[2]]])
-        wolf_b = _build_wolf([[self.tasks[0], self.tasks[1]], [self.tasks[2]]])
-        self.assertEqual(
-            WolfEvaluator._derive_chaos_x0(wolf_a),
-            WolfEvaluator._derive_chaos_x0(wolf_b),
-        )
-
-    def test_different_task_order_yields_different_x0(self) -> None:
-        wolf_a = _build_wolf([[self.tasks[0], self.tasks[1]]])
-        wolf_b = _build_wolf([[self.tasks[1], self.tasks[0]]])
-        self.assertNotEqual(
-            WolfEvaluator._derive_chaos_x0(wolf_a),
-            WolfEvaluator._derive_chaos_x0(wolf_b),
-        )
-
-    def test_different_agv_split_yields_different_x0(self) -> None:
-        wolf_a = _build_wolf([[self.tasks[0], self.tasks[1]]])
-        wolf_b = _build_wolf([[self.tasks[0]], [self.tasks[1]]])
-        self.assertNotEqual(
-            WolfEvaluator._derive_chaos_x0(wolf_a),
-            WolfEvaluator._derive_chaos_x0(wolf_b),
-        )
-
-    def test_x0_stays_in_safe_interval(self) -> None:
-        wolf = _build_wolf([[self.tasks[0]]])
-        x0 = WolfEvaluator._derive_chaos_x0(wolf)
-        self.assertGreaterEqual(x0, 0.1)
-        self.assertLessEqual(x0, 0.9)
-
     def test_repeated_rebuild_on_fresh_evaluator_matches_fitness(self) -> None:
         """Two fresh evaluators rebuilding the same wolf structure must agree.
 
-        Before the fix this failed because `random.random()` advanced the global
-        RNG between calls, yielding different Tent sequences and different fitness.
+        Evaluator and planner are now free of any random state, so identical
+        wolf structures yield identical fitness / dist / penalty / path.
         """
         wolf1 = _build_wolf([[self.tasks[0], self.tasks[1], self.tasks[2]]])
         wolf2 = _build_wolf([[self.tasks[0], self.tasks[1], self.tasks[2]]])
@@ -74,6 +44,15 @@ class DeterministicChaosX0Tests(unittest.TestCase):
         self.assertEqual(r1.fitness, r2.fitness)
         self.assertEqual(r1.total_dist, r2.total_dist)
         self.assertEqual(r1.time_penalty, r2.time_penalty)
+        self.assertEqual(r1.agv_list[0].path, r2.agv_list[0].path)
+
+    def test_two_agv_layout_is_also_deterministic(self) -> None:
+        wolf1 = _build_wolf([[self.tasks[0]], [self.tasks[1], self.tasks[2]]])
+        wolf2 = _build_wolf([[self.tasks[0]], [self.tasks[1], self.tasks[2]]])
+        r1 = WolfEvaluator(self.grid_map).rebuild_wolf(wolf1)
+        r2 = WolfEvaluator(self.grid_map).rebuild_wolf(wolf2)
+        self.assertEqual(r1.fitness, r2.fitness)
+        self.assertEqual(r1.agv_list[1].path, r2.agv_list[1].path)
 
 
 if __name__ == "__main__":

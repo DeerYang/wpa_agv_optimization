@@ -8,7 +8,6 @@ from unittest import mock
 
 import numpy as np
 
-from src.wpa_agv_optimization import evaluator as evaluator_module
 from src.wpa_agv_optimization.evaluator import WolfEvaluator
 from src.wpa_agv_optimization.models import AGV, Task, Wolf
 from src.wpa_agv_optimization.wpa_ops import WPAOperators
@@ -26,11 +25,6 @@ def _build_wolf(task_groups: list[list[Task]]) -> Wolf:
     return wolf
 
 
-def _fixed_tent_iter(x0=0.4):
-    while True:
-        yield 0.0
-
-
 class IncrementalEvaluatorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.grid_map = np.zeros((20, 20), dtype=int)
@@ -41,39 +35,38 @@ class IncrementalEvaluatorTests(unittest.TestCase):
         ]
 
     def test_incremental_rebuild_reuses_unchanged_prefix(self) -> None:
-        with mock.patch.object(evaluator_module, "tent_map_iter", side_effect=_fixed_tent_iter):
-            base_wolf = _build_wolf([[self.tasks[0]], [self.tasks[1], self.tasks[2]]])
-            base_evaluator = WolfEvaluator(self.grid_map)
-            base_result = base_evaluator.rebuild_wolf(base_wolf)
+        base_wolf = _build_wolf([[self.tasks[0]], [self.tasks[1], self.tasks[2]]])
+        base_evaluator = WolfEvaluator(self.grid_map)
+        base_result = base_evaluator.rebuild_wolf(base_wolf)
 
-            full_candidate = _build_wolf([[self.tasks[0]], [self.tasks[2], self.tasks[1]]])
-            full_evaluator = WolfEvaluator(self.grid_map)
-            full_plan_calls = 0
-            full_plan = full_evaluator.planner.plan
+        full_candidate = _build_wolf([[self.tasks[0]], [self.tasks[2], self.tasks[1]]])
+        full_evaluator = WolfEvaluator(self.grid_map)
+        full_plan_calls = 0
+        full_plan = full_evaluator.planner.plan
 
-            def full_plan_wrap(*args, **kwargs):
-                nonlocal full_plan_calls
-                full_plan_calls += 1
-                return full_plan(*args, **kwargs)
+        def full_plan_wrap(*args, **kwargs):
+            nonlocal full_plan_calls
+            full_plan_calls += 1
+            return full_plan(*args, **kwargs)
 
-            full_evaluator.planner.plan = full_plan_wrap
-            full_result = full_evaluator.rebuild_wolf(full_candidate)
+        full_evaluator.planner.plan = full_plan_wrap
+        full_result = full_evaluator.rebuild_wolf(full_candidate)
 
-            incremental_candidate = _build_wolf([[self.tasks[0]], [self.tasks[2], self.tasks[1]]])
-            incremental_evaluator = WolfEvaluator(self.grid_map)
-            incremental_plan_calls = 0
-            incremental_plan = incremental_evaluator.planner.plan
+        incremental_candidate = _build_wolf([[self.tasks[0]], [self.tasks[2], self.tasks[1]]])
+        incremental_evaluator = WolfEvaluator(self.grid_map)
+        incremental_plan_calls = 0
+        incremental_plan = incremental_evaluator.planner.plan
 
-            def incremental_plan_wrap(*args, **kwargs):
-                nonlocal incremental_plan_calls
-                incremental_plan_calls += 1
-                return incremental_plan(*args, **kwargs)
+        def incremental_plan_wrap(*args, **kwargs):
+            nonlocal incremental_plan_calls
+            incremental_plan_calls += 1
+            return incremental_plan(*args, **kwargs)
 
-            incremental_evaluator.planner.plan = incremental_plan_wrap
-            incremental_result = incremental_evaluator.rebuild_wolf(
-                incremental_candidate,
-                base_wolf=copy.deepcopy(base_result),
-            )
+        incremental_evaluator.planner.plan = incremental_plan_wrap
+        incremental_result = incremental_evaluator.rebuild_wolf(
+            incremental_candidate,
+            base_wolf=copy.deepcopy(base_result),
+        )
 
         self.assertEqual(incremental_result.fitness, full_result.fitness)
         self.assertEqual(incremental_result.total_dist, full_result.total_dist)
