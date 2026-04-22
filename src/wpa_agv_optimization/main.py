@@ -18,7 +18,7 @@ from .initializer import PopulationInitializer
 from .models import Task
 from .original_wpa import OriginalWPAConfig, OriginalWPAOptimizer
 from .scenario_inputs import SCENARIO_LIBRARY
-from .utils import generate_grid_map
+from .utils import generate_grid_map, is_valid_pick_location
 from .wpa_ops import WPAOperators
 
 
@@ -70,16 +70,23 @@ def load_scenario(scenario_index: int):
     scenario = SCENARIO_LIBRARY[scenario_index - 1]
     grid_map = np.zeros((Config.MAP_WIDTH, Config.MAP_HEIGHT), dtype=int)
 
+    obstacles: set[tuple[int, int]] = set()
     for x, y in scenario["obstacles"]:
         if 0 <= x < Config.MAP_WIDTH and 0 <= y < Config.MAP_HEIGHT:
             if x != 0 and (x, y) != Config.DEPOT_NODE:
                 grid_map[x][y] = 1
+                obstacles.add((x, y))
 
     task_list = []
     for i, item in enumerate(scenario["tasks"], start=1):
         tx, ty = item["x"], item["y"]
         if grid_map[tx][ty] == 1:
             raise ValueError(f"场景[{scenario_index}]任务落在障碍物上: ({tx},{ty})")
+        if not is_valid_pick_location((tx, ty), obstacles):
+            raise ValueError(
+                f"场景[{scenario_index}]任务#{i} ({tx},{ty}) 未贴货架："
+                "任务必须位于至少一个 4-邻居为障碍（货架）的格子。"
+            )
         task_list.append(Task(i, tx, ty, item["weight"], item["deadline"]))
 
     return grid_map, task_list, scenario["name"]
@@ -123,14 +130,33 @@ def parse_args() -> argparse.Namespace:
 
 def build_random_tasks(grid_map):
     """Generate a random task set when no fixed scenario is selected."""
+    width, height = grid_map.shape
+    obstacles = {(x, y) for x in range(width) for y in range(height) if grid_map[x][y] == 1}
+    valid_cells = [
+        (x, y)
+        for x in range(1, width)
+        for y in range(height)
+        if is_valid_pick_location((x, y), obstacles)
+    ]
+    if not valid_cells:
+        raise ValueError("随机地图上没有任何贴货架的合法任务位置，请调高障碍密度或重生成地图。")
+
     task_list = []
     task_num = 15
-    for i in range(task_num):
-        while True:
-            tx, ty = random.randint(1, 19), random.randint(1, 19)
-            if grid_map[tx][ty] == 0:
-                break
-        task_list.append(Task(i + 1, tx, ty, random.randint(10, 40), random.randint(50, 300)))
+    max_attempts = task_num * 50
+    chosen: set[tuple[int, int]] = set()
+    attempts = 0
+    while len(task_list) < task_num:
+        attempts += 1
+        if attempts > max_attempts:
+            raise ValueError(
+                f"随机任务采样失败：{max_attempts} 次尝试内无法凑齐 {task_num} 个互不重复的贴货架任务位。"
+            )
+        tx, ty = random.choice(valid_cells)
+        if (tx, ty) in chosen:
+            continue
+        chosen.add((tx, ty))
+        task_list.append(Task(len(task_list) + 1, tx, ty, random.randint(10, 40), random.randint(50, 300)))
     return task_list
 
 

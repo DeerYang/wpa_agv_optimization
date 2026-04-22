@@ -74,3 +74,52 @@ def manhattan_dist(start, end):
     """
     return abs(start[0] - end[0]) + abs(start[1] - end[1])
 
+
+_NEIGHBOR_OFFSETS = ((1, 0), (-1, 0), (0, 1), (0, -1))
+
+
+def is_valid_pick_location(pos, obstacles):
+    """任务合法落点：自身非障碍，且至少一个 4-邻居是障碍（货架）。"""
+    if pos in obstacles:
+        return False
+    x, y = pos
+    for dx, dy in _NEIGHBOR_OFFSETS:
+        if (x + dx, y + dy) in obstacles:
+            return True
+    return False
+
+
+def nearest_pick_location(pos, obstacles, grid_shape, max_radius=None):
+    """返回离 pos 最近的合法 pick location；pos 本身合法则直接返回。
+
+    BFS 扫描 Chebyshev 距离由小到大的候选格，用于把孤岛任务挪到最近货架邻接格。
+    """
+    width, height = grid_shape
+    if max_radius is None:
+        max_radius = max(width, height)
+
+    if is_valid_pick_location(pos, obstacles):
+        return pos
+
+    x0, y0 = pos
+    for radius in range(1, max_radius + 1):
+        best = None
+        best_manhattan = None
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                if max(abs(dx), abs(dy)) != radius:
+                    continue
+                nx, ny = x0 + dx, y0 + dy
+                if not (0 <= nx < width and 0 <= ny < height):
+                    continue
+                cand = (nx, ny)
+                if not is_valid_pick_location(cand, obstacles):
+                    continue
+                md = abs(dx) + abs(dy)
+                if best is None or md < best_manhattan or (md == best_manhattan and cand < best):
+                    best = cand
+                    best_manhattan = md
+        if best is not None:
+            return best
+    return None
+
