@@ -209,11 +209,16 @@ class WolfEvaluator:
         agv_map: Dict[int, object],
     ) -> Optional[Dict[str, object]]:
         """对候选段路径做冲突检测，并返回冲突详情。"""
-        node_hit = self.traffic_manager.detect_node_conflict(agv.id, segment_path, reservation_table)
+        node_hit = self.traffic_manager.detect_node_conflict(
+            agv.id,
+            segment_path,
+            reservation_table,
+            reservation_owner=reservation_owner,
+        )
         if node_hit is not None:
             time_step, node = node_hit
             holder_id = reservation_owner.get((node[0], node[1], time_step))
-            if holder_id is not None and holder_id in agv_map:
+            if holder_id is not None and holder_id != agv.id and holder_id in agv_map:
                 return {
                     "kind": "node",
                     "time": time_step,
@@ -235,11 +240,16 @@ class WolfEvaluator:
                     "edge": edge,
                 }
 
-        rear_hit = self.traffic_manager.detect_rear_conflict(segment_path, reservation_table)
+        rear_hit = self.traffic_manager.detect_rear_conflict(
+            agv.id,
+            segment_path,
+            reservation_table,
+            reservation_owner=reservation_owner,
+        )
         if rear_hit is not None:
             time_step, node = rear_hit
             holder_id = reservation_owner.get((node[0], node[1], time_step - 1))
-            if holder_id is not None and holder_id in agv_map:
+            if holder_id is not None and holder_id != agv.id and holder_id in agv_map:
                 return {
                     "kind": "rear",
                     "time": time_step,
@@ -327,6 +337,7 @@ class WolfEvaluator:
                 target_pos = Config.DEPOT_NODE if target is None else (target.x, target.y)
                 max_retries = 16
                 retries = 0
+                segment_accepted = False
                 segment_path: Optional[List[TimedNode]] = None
                 temporary_blocks: Set[TimedNode] = set()
 
@@ -376,6 +387,7 @@ class WolfEvaluator:
                             agv_map=agv_map,
                         )
                         if service_conflict is None:
+                            segment_accepted = True
                             break
                         conflict = service_conflict
 
@@ -456,6 +468,9 @@ class WolfEvaluator:
                         temporary_blocks |= self._temporary_blocks_for_conflict(wait_conflict)
 
                     retries += 1
+
+                if not segment_accepted:
+                    segment_path = None
 
                 if segment_path is None:
                     # 规划彻底失败：AGV 停机，避免瞬移污染时空占用表
@@ -551,4 +566,3 @@ class WolfEvaluator:
         wolf.unfinished_count = total_unfinished
         wolf._cache_ready = True
         return wolf
-

@@ -133,6 +133,20 @@ class ConflictDetectionTests(unittest.TestCase):
     def test_node_conflict_empty_path_returns_none(self) -> None:
         self.assertIsNone(self.tm.detect_node_conflict(0, [], {(1, 0, 1)}))
 
+    def test_node_conflict_ignores_self_reserved_start_node(self) -> None:
+        segment = [(6, 12, 16), (6, 11, 17)]
+        reservation = {(6, 12, 16), (6, 11, 17)}
+        reservation_owner = {(6, 12, 16): 5, (6, 11, 17): 1}
+
+        hit = self.tm.detect_node_conflict(
+            agv_id=5,
+            segment_path=segment,
+            reservation_table=reservation,
+            reservation_owner=reservation_owner,
+        )
+
+        self.assertEqual(hit, (17, (6, 11)))
+
     def test_edge_conflict_detects_opposite_direction(self) -> None:
         segment = [(0, 0, 0), (1, 0, 1)]
         occupied = {((1, 0), (0, 0), 1)}
@@ -147,8 +161,22 @@ class ConflictDetectionTests(unittest.TestCase):
     def test_rear_conflict_uses_t_minus_one(self) -> None:
         segment = [(0, 0, 0), (1, 0, 1)]
         reservation = {(1, 0, 0)}  # holder at (1,0) at t=0; current enters at t=1
-        hit = self.tm.detect_rear_conflict(segment, reservation)
+        hit = self.tm.detect_rear_conflict(agv_id=0, segment_path=segment, reservation_table=reservation)
         self.assertEqual(hit, (1, (1, 0)))
+
+    def test_rear_conflict_ignores_self_t_minus_one_reservation(self) -> None:
+        segment = [(6, 12, 16), (6, 11, 17)]
+        reservation = {(6, 11, 16)}
+        reservation_owner = {(6, 11, 16): 5}
+
+        hit = self.tm.detect_rear_conflict(
+            agv_id=5,
+            segment_path=segment,
+            reservation_table=reservation,
+            reservation_owner=reservation_owner,
+        )
+
+        self.assertIsNone(hit)
 
 
 class ClassifyConflictTests(unittest.TestCase):

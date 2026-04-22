@@ -136,13 +136,18 @@ class TrafficManager:
         agv_id: int,
         segment_path: List[TimedNode],
         reservation_table: Set[TimedNode],
+        reservation_owner: Optional[Dict[TimedNode, int]] = None,
     ) -> Optional[Tuple[int, Node]]:
         """Detect node-time occupation conflict."""
         if not segment_path:
             return None
         for x, y, t in segment_path:
-            if (x, y, t) in reservation_table:
-                return t, (x, y)
+            timed_node = (x, y, t)
+            if timed_node not in reservation_table:
+                continue
+            if reservation_owner is not None and reservation_owner.get(timed_node) == agv_id:
+                continue
+            return t, (x, y)
         return None
 
     def detect_edge_conflict(
@@ -163,16 +168,22 @@ class TrafficManager:
 
     def detect_rear_conflict(
         self,
+        agv_id: int,
         segment_path: List[TimedNode],
         reservation_table: Set[TimedNode],
+        reservation_owner: Optional[Dict[TimedNode, int]] = None,
     ) -> Optional[Tuple[int, Node]]:
         """Detect rear conflict candidate by t-1 reservation overlap."""
         if len(segment_path) < 2:
             return None
         for i in range(1, len(segment_path)):
             x, y, t = segment_path[i]
-            if (x, y, t - 1) in reservation_table:
-                return t, (x, y)
+            timed_node = (x, y, t - 1)
+            if timed_node not in reservation_table:
+                continue
+            if reservation_owner is not None and reservation_owner.get(timed_node) == agv_id:
+                continue
+            return t, (x, y)
         return None
 
     def classify_conflict(

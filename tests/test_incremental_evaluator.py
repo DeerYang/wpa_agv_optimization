@@ -10,6 +10,7 @@ import numpy as np
 
 from src.wpa_agv_optimization.evaluator import WolfEvaluator
 from src.wpa_agv_optimization.models import AGV, Task, Wolf
+from src.wpa_agv_optimization.traffic_manager import ConflictEvent
 from src.wpa_agv_optimization.wpa_ops import WPAOperators
 
 
@@ -179,6 +180,70 @@ class IncrementalEvaluatorTests(unittest.TestCase):
         self.assertEqual(reservation_owner[(3, 10, 13)], 0)
         self.assertNotIn((3, 10, 13), agv_reserved_nodes)
         self.assertIn((3, 10, 12), agv_reserved_nodes)
+
+    def test_detect_conflict_event_prioritizes_foreign_edge_over_self_start_reservation(self) -> None:
+        evaluator = WolfEvaluator(self.grid_map)
+        agv = AGV(agv_id=5, start_pos=(0, 5))
+        holder = AGV(agv_id=1, start_pos=(0, 1))
+        holder.path = [(6, 10, 15), (6, 11, 16), (6, 12, 17)]
+        segment_path = [(6, 12, 16), (6, 11, 17), (6, 10, 18)]
+        reservation_table = {(6, 12, 16), (6, 11, 16)}
+        reservation_owner = {(6, 12, 16): 5, (6, 11, 16): 1}
+        occupied_edges = {(((6, 11), (6, 12), 17))}
+        edge_owner = {((6, 11), (6, 12), 17): 1}
+
+        conflict = evaluator._detect_conflict_event(
+            agv=agv,
+            segment_path=segment_path,
+            reservation_table=reservation_table,
+            reservation_owner=reservation_owner,
+            occupied_edges=occupied_edges,
+            edge_owner=edge_owner,
+            agv_map={1: holder, 5: agv},
+        )
+
+        self.assertIsNotNone(conflict)
+        self.assertEqual(conflict["kind"], "edge")
+        self.assertEqual(conflict["holder_id"], 1)
+        self.assertEqual(conflict["time"], 17)
+
+    def test_rebuild_wolf_drops_segment_when_conflict_never_resolves(self) -> None:
+        evaluator = WolfEvaluator(self.grid_map)
+        wolf = Wolf()
+        current = AGV(agv_id=0, start_pos=(0, 0))
+        current.tasks = [self.tasks[0]]
+        current.load = self.tasks[0].weight
+        holder = AGV(agv_id=1, start_pos=(0, 1))
+        wolf.agv_list = [current, holder]
+
+        with mock.patch.object(evaluator.planner, "plan", return_value=[(0, 0, 0), (1, 0, 1)]), \
+             mock.patch.object(
+                 evaluator,
+                 "_detect_conflict_event",
+                 side_effect=lambda agv, *args, **kwargs: (
+                     {"kind": "node", "time": 1, "holder_id": 1, "node": (1, 0), "edge": None}
+                     if agv.id == 0 else None
+                 ),
+             ), \
+             mock.patch.object(evaluator, "_detect_service_window_conflict", return_value=None), \
+             mock.patch.object(
+                 evaluator.traffic_manager,
+                 "resolve_conflict",
+                 return_value=ConflictEvent(
+                     conflict_type="node",
+                     conflict_subtype="node_shared_generic",
+                     time_step=1,
+                     agv_high=1,
+                     agv_low=0,
+                     action="wait",
+                     risk_score=0.0,
+                     node=(1, 0),
+                 ),
+             ):
+            result = evaluator.rebuild_wolf(wolf)
+
+        self.assertEqual(result.unfinished_count, 1)
+        self.assertEqual(result.agv_list[0].path, [])
 
     def test_original_summoning_uses_shared_prepare_pipeline(self) -> None:
         operators = WPAOperators(evaluator=None)

@@ -46,6 +46,20 @@ def _collect_service_window_collisions(wolf: Wolf, service_time: int) -> list[tu
     return collisions
 
 
+def _collect_opposite_edge_swaps(wolf: Wolf) -> list[tuple]:
+    owners: dict[tuple, int] = {}
+    collisions = []
+    for agv in wolf.agv_list:
+        for edge in getattr(agv, "_reserved_edges", set()):
+            u, v, t = edge
+            reverse = (v, u, t)
+            holder = owners.get(reverse)
+            if holder is not None and holder != agv.id:
+                collisions.append((edge, holder, agv.id))
+            owners[edge] = agv.id
+    return collisions
+
+
 class ServiceWindowConflictRegressionTests(unittest.TestCase):
     """After the fix, no AGV should ever reuse a timed-node already held by another."""
 
@@ -78,6 +92,21 @@ class ServiceWindowConflictRegressionTests(unittest.TestCase):
         self.assertEqual(
             collisions, [],
             msg=f"scenario 3 has service-window collisions: {collisions[:5]}",
+        )
+
+    def test_scenario_3_has_no_opposite_edge_swap(self) -> None:
+        result = run_algorithm(
+            scenario=3,
+            algorithm="improved",
+            seed=20263228,
+            verbose=False,
+            allow_interactive=False,
+            export_json=False,
+        )
+        collisions = _collect_opposite_edge_swaps(result.wolf)
+        self.assertEqual(
+            collisions, [],
+            msg=f"scenario 3 produced opposite-edge swaps: {collisions[:5]}",
         )
 
     def test_scenario_1_has_no_collisions(self) -> None:
