@@ -67,6 +67,13 @@ class WolfEvaluator:
             x, y = conflict["node"]
             for extra_t in range(time_step, time_step + 3):
                 blocks.add((x, y, extra_t))
+            # 服务期冲突：conflict["time"] 指向服务占位帧，planner 看不出"到达后会服务"，
+            # 必须同时封锁"到达时刻"本身以及前一帧，否则下一轮重规划仍会落回同一到达点。
+            arrive_time = conflict.get("arrive_time")
+            if arrive_time is not None:
+                arrive_time = int(arrive_time)
+                for extra_t in range(max(0, arrive_time - 1), arrive_time + 1):
+                    blocks.add((x, y, extra_t))
         return blocks
 
     @staticmethod
@@ -270,6 +277,7 @@ class WolfEvaluator:
                         "holder_id": holder_id,
                         "node": (x, y),
                         "edge": None,
+                        "arrive_time": arrive_time,
                     }
         return None
 
@@ -317,7 +325,7 @@ class WolfEvaluator:
 
             for target_idx, target in enumerate(targets):
                 target_pos = Config.DEPOT_NODE if target is None else (target.x, target.y)
-                max_retries = 8
+                max_retries = 16
                 retries = 0
                 segment_path: Optional[List[TimedNode]] = None
                 temporary_blocks: Set[TimedNode] = set()
@@ -430,6 +438,10 @@ class WolfEvaluator:
                         curr_time += 2
                     else:
                         curr_time += 1
+                        # 服务期冲突必须累加 blocks，否则 planner 会反复返回同一有冲突的到达点。
+                        # 普通节点/边冲突保留旧语义（wait 不加 blocks，让 planner 尝试重找）。
+                        if "arrive_time" in conflict:
+                            temporary_blocks |= self._temporary_blocks_for_conflict(conflict)
 
                     curr_time, wait_conflict = self._reserve_wait_window(
                         agv_id=agv.id,
