@@ -128,7 +128,9 @@ class DetectServiceWindowConflictTests(unittest.TestCase):
 
     def test_detect_returns_arrive_time_field(self) -> None:
         import numpy as np
-        evaluator = WolfEvaluator(np.zeros((20, 20), dtype=int))
+        from src.wpa_agv_optimization.config import Config
+
+        evaluator = WolfEvaluator(np.zeros((Config.MAP_WIDTH, Config.MAP_HEIGHT), dtype=int))
         agv = AGV(agv_id=2, start_pos=(0, 2))
         last_node = (5, 5, 7)
         reservation_table = {(5, 5, 8)}

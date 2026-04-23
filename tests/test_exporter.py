@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
+from src.wpa_agv_optimization.config import Config
 from src.wpa_agv_optimization.exporter import (
     build_frontend_output_path,
     export_result_json,
@@ -64,7 +65,7 @@ class ExporterTests(unittest.TestCase):
         project_root = self.make_project_root('exporter-json')
         wolf = DummyWolf()
         tasks = [DummyTask(1, 2, 3, 10, 50)]
-        grid_map = np.zeros((20, 20), dtype=int)
+        grid_map = np.zeros((Config.MAP_WIDTH, Config.MAP_HEIGHT), dtype=int)
 
         output = export_result_json(
             wolf=wolf,

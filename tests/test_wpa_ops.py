@@ -180,11 +180,10 @@ class SequenceTransformerTests(unittest.TestCase):
 class RouteAndScoringTests(unittest.TestCase):
     def test_estimate_route_cost_is_manhattan_plus_depot_return(self) -> None:
         ops = _operators()
-        # Start at (0,0), one task at (3,0); distance: 3 + (depot 19,19 - 3,0 = 19-3 + 19 = 35)
         task = _task(1, 3, 0, 10, 1000)
         cost = ops._estimate_route_cost([task], start_pos=(0, 0))
-        # 3 (to task) + 35 (to depot) = 38, no deadline penalty
-        self.assertAlmostEqual(cost, 38.0)
+        depot_return = abs(Config.DEPOT_NODE[0] - 3) + abs(Config.DEPOT_NODE[1] - 0)
+        self.assertAlmostEqual(cost, 3.0 + depot_return)
 
     def test_estimate_route_cost_empty_is_zero(self) -> None:
         ops = _operators()
@@ -195,8 +194,8 @@ class RouteAndScoringTests(unittest.TestCase):
         # Task with tight deadline: travel=3, service=2, arrival=5, deadline=2, tardy=3
         task = _task(1, 3, 0, 10, 2)
         cost = ops._estimate_route_cost([task], start_pos=(0, 0))
-        # 3 (travel) + 35 (to depot) + W3_TIME(10) * 3 (tardy) = 38 + 30 = 68
-        self.assertAlmostEqual(cost, 68.0)
+        depot_return = abs(Config.DEPOT_NODE[0] - 3) + abs(Config.DEPOT_NODE[1] - 0)
+        self.assertAlmostEqual(cost, 3.0 + depot_return + Config.W3_TIME * 3.0)
 
     def test_weighted_component_scores_returns_all_categories(self) -> None:
         ops = _operators()

@@ -94,7 +94,7 @@ class OriginalWPAHelperTests(unittest.TestCase):
 
 class OriginalWPAFlowTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.grid_map = np.zeros((20, 20), dtype=int)
+        self.grid_map = np.zeros((Config.MAP_WIDTH, Config.MAP_HEIGHT), dtype=int)
         self.task_list = [Task(1, 1, 1, 10, 10)]
         self.optimizer = OriginalWPAOptimizer(
             self.grid_map,

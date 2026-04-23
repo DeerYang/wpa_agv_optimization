@@ -8,6 +8,7 @@ from unittest import mock
 
 import numpy as np
 
+from src.wpa_agv_optimization.config import Config
 from src.wpa_agv_optimization.evaluator import WolfEvaluator
 from src.wpa_agv_optimization.models import AGV, Task, Wolf
 from src.wpa_agv_optimization.traffic_manager import ConflictEvent
@@ -28,7 +29,7 @@ def _build_wolf(task_groups: list[list[Task]]) -> Wolf:
 
 class IncrementalEvaluatorTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.grid_map = np.zeros((20, 20), dtype=int)
+        self.grid_map = np.zeros((Config.MAP_WIDTH, Config.MAP_HEIGHT), dtype=int)
         self.tasks = [
             Task(1, 2, 2, 10, 20),
             Task(2, 6, 4, 10, 35),

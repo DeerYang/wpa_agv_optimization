@@ -7,8 +7,8 @@ class Config:
     """Project-wide static configuration."""
 
     # ===================== 地图与环境参数 =====================
-    MAP_WIDTH = 20
-    MAP_HEIGHT = 20
+    MAP_WIDTH = 30
+    MAP_HEIGHT = 30
     OBSTACLE_RATIO = 0.1
 
     # ===================== AGV 物理参数 =====================

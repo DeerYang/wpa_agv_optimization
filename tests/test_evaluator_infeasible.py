@@ -26,7 +26,7 @@ def _build_wolf(task_groups: list[list[Task]]) -> Wolf:
 
 class EvaluatorInfeasibleTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.grid_map = np.zeros((20, 20), dtype=int)
+        self.grid_map = np.zeros((Config.MAP_WIDTH, Config.MAP_HEIGHT), dtype=int)
         self.tasks = [
             Task(1, 2, 2, 10, 60),
             Task(2, 6, 4, 10, 90),

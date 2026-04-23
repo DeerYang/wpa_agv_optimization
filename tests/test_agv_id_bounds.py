@@ -13,7 +13,7 @@ from src.wpa_agv_optimization.original_wpa import _open_next_agv as original_ope
 
 class AgvIdBoundsTests(unittest.TestCase):
     def setUp(self) -> None:
-        grid = np.zeros((20, 20), dtype=int)
+        grid = np.zeros((Config.MAP_WIDTH, Config.MAP_HEIGHT), dtype=int)
         self.initializer = PopulationInitializer(grid, [])
         self.last_idx = len(Config.START_NODES) - 1
 
