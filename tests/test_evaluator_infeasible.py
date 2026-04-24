@@ -101,6 +101,44 @@ class EvaluatorInfeasibleTests(unittest.TestCase):
         # Path reflects only the completed leg.
         self.assertGreater(len(result.agv_list[0].path), 0)
 
+    def test_incremental_rebuild_waits_past_default_window_for_feasible_task(self) -> None:
+        evaluator = WolfEvaluator(self.grid_map)
+        task = Task(10, 1, 1, 10, 500)
+
+        blocker = AGV(agv_id=0, start_pos=(0, 0))
+        blocker._task_signature = ()
+        blocker._reserved_nodes = {(1, 1, t) for t in range(1, 61)}
+        blocker._reserved_edges = set()
+        blocker._cached_metrics = {
+            "dist": 0,
+            "wait_time": 0,
+            "service_time": 0,
+            "time_penalty": 0,
+            "conflict_count": 0,
+            "deadlock_count": 0,
+            "deadlock_risk_count": 0,
+            "replan_count": 0,
+            "reroute_count": 0,
+            "unfinished_count": 0,
+        }
+        base_second = AGV(agv_id=1, start_pos=(0, 1))
+
+        base_wolf = Wolf()
+        base_wolf.agv_list = [blocker, base_second]
+        base_wolf._cache_ready = True
+
+        candidate_blocker = AGV(agv_id=0, start_pos=(0, 0))
+        candidate = AGV(agv_id=1, start_pos=(0, 1))
+        candidate.tasks = [task]
+        candidate.load = task.weight
+        wolf = Wolf()
+        wolf.agv_list = [candidate_blocker, candidate]
+
+        result = evaluator.rebuild_wolf(wolf, base_wolf=base_wolf)
+
+        self.assertEqual(result.unfinished_count, 0)
+        self.assertGreaterEqual(result.agv_list[1].task_completion_times[task.id], 63)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -252,6 +252,48 @@ class PriorityAndYieldTests(unittest.TestCase):
         p_relaxed = self.tm.compute_priority(relaxed, current_time=0, remain_dist_est=10)
         self.assertGreater(p_urgent, p_relaxed)
 
+    def test_priority_uses_tightest_remaining_deadline_not_last_task(self) -> None:
+        urgent_then_relaxed = _make_agv(
+            1,
+            tasks=[
+                _task(1, 5, 5, 20, 10),
+                _task(2, 6, 5, 20, 500),
+            ],
+            load=50,
+        )
+        relaxed = _make_agv(2, tasks=[_task(3, 5, 5, 20, 100)], load=50)
+
+        p_urgent = self.tm.compute_priority(urgent_then_relaxed, current_time=0, remain_dist_est=10)
+        p_relaxed = self.tm.compute_priority(relaxed, current_time=0, remain_dist_est=10)
+
+        self.assertGreater(p_urgent, p_relaxed)
+
+    def test_current_deadline_overrides_completed_task_deadlines(self) -> None:
+        historical_urgent = _make_agv(
+            1,
+            tasks=[
+                _task(1, 5, 5, 20, 10),
+                _task(2, 6, 5, 20, 500),
+            ],
+            load=50,
+        )
+        current_urgent = _make_agv(2, tasks=[_task(3, 5, 5, 20, 50)], load=50)
+
+        p_historical = self.tm.compute_priority(
+            historical_urgent,
+            current_time=40,
+            remain_dist_est=10,
+            current_deadline=500,
+        )
+        p_current = self.tm.compute_priority(
+            current_urgent,
+            current_time=40,
+            remain_dist_est=10,
+            current_deadline=50,
+        )
+
+        self.assertGreater(p_current, p_historical)
+
     def test_priority_no_tasks_has_zero_urgency_component(self) -> None:
         empty = _make_agv(1, tasks=[], load=0)
         # only load and remain contribute; with load=0 and remain=∞(1e9), score ≈ 0

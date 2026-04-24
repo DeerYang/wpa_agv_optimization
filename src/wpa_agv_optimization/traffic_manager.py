@@ -232,15 +232,26 @@ class TrafficManager:
             return "node_turn_straight_mix"
         return "node_shared_generic"
 
-    def compute_priority(self, agv, current_time: int, remain_dist_est: int) -> float:
+    def compute_priority(
+        self,
+        agv,
+        current_time: int,
+        remain_dist_est: int,
+        current_deadline: Optional[int] = None,
+    ) -> float:
         """Compute dynamic priority score."""
-        if agv.tasks:
-            slack = max(1, agv.tasks[-1].deadline - current_time)
+        if current_deadline is not None:
+            deadlines = [current_deadline]
+        else:
+            deadlines = [task.deadline for task in getattr(agv, "tasks", [])]
+
+        if deadlines:
+            slack = min(max(1, deadline - current_time) for deadline in deadlines)
             urgent_score = 1.0 / slack
         else:
             urgent_score = 0.0
 
-        load_score = agv.load / max(1, Config.AGV_CAPACITY)
+        load_score = getattr(agv, "load", 0) / max(1, Config.AGV_CAPACITY)
         remain_score = 1.0 / max(1, remain_dist_est)
         return self.urgent_w * urgent_score + self.load_w * load_score + self.remain_w * remain_score
 
@@ -251,10 +262,22 @@ class TrafficManager:
         time_step: int,
         remain_dist_a: int,
         remain_dist_b: int,
+        current_deadline_a: Optional[int] = None,
+        current_deadline_b: Optional[int] = None,
     ) -> Tuple[int, int]:
         """Return (high_priority_id, low_priority_id)."""
-        pa = self.compute_priority(agv_a, time_step, remain_dist_a)
-        pb = self.compute_priority(agv_b, time_step, remain_dist_b)
+        pa = self.compute_priority(
+            agv_a,
+            time_step,
+            remain_dist_a,
+            current_deadline=current_deadline_a,
+        )
+        pb = self.compute_priority(
+            agv_b,
+            time_step,
+            remain_dist_b,
+            current_deadline=current_deadline_b,
+        )
         if pa >= pb:
             return agv_a.id, agv_b.id
         return agv_b.id, agv_a.id
@@ -351,6 +374,8 @@ class TrafficManager:
         has_cycle: bool = False,
         node: Optional[Node] = None,
         edge: Optional[Edge] = None,
+        current_deadline_a: Optional[int] = None,
+        current_deadline_b: Optional[int] = None,
     ) -> ConflictEvent:
         """Return wait/reroute/replan action based on subtype and risk."""
         high, low = self.choose_yield_agv(
@@ -359,6 +384,8 @@ class TrafficManager:
             time_step=time_step,
             remain_dist_a=remain_dist_a,
             remain_dist_b=remain_dist_b,
+            current_deadline_a=current_deadline_a,
+            current_deadline_b=current_deadline_b,
         )
 
         risk_score = self.estimate_deadlock_risk(

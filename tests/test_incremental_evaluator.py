@@ -246,6 +246,44 @@ class IncrementalEvaluatorTests(unittest.TestCase):
         self.assertEqual(result.unfinished_count, 1)
         self.assertEqual(result.agv_list[0].path, [])
 
+    def test_high_priority_current_agv_wait_conflict_is_upgraded_to_reroute(self) -> None:
+        evaluator = WolfEvaluator(self.grid_map)
+        wolf = Wolf()
+        current = AGV(agv_id=0, start_pos=(0, 0))
+        current.tasks = [self.tasks[0]]
+        current.load = self.tasks[0].weight
+        holder = AGV(agv_id=1, start_pos=(0, 1))
+        wolf.agv_list = [current, holder]
+
+        with mock.patch.object(evaluator.planner, "plan", return_value=[(0, 0, 0), (1, 0, 1)]), \
+             mock.patch.object(
+                 evaluator,
+                 "_detect_conflict_event",
+                 side_effect=lambda agv, *args, **kwargs: (
+                     {"kind": "node", "time": 1, "holder_id": 1, "node": (1, 0), "edge": None}
+                     if agv.id == 0 else None
+                 ),
+             ), \
+             mock.patch.object(evaluator, "_detect_service_window_conflict", return_value=None), \
+             mock.patch.object(
+                 evaluator.traffic_manager,
+                 "resolve_conflict",
+                 return_value=ConflictEvent(
+                     conflict_type="node",
+                     conflict_subtype="node_shared_generic",
+                     time_step=1,
+                     agv_high=0,
+                     agv_low=1,
+                     action="wait",
+                     risk_score=0.0,
+                     node=(1, 0),
+                 ),
+             ):
+            result = evaluator.rebuild_wolf(wolf)
+
+        self.assertGreater(result.reroute_count, 0)
+        self.assertEqual(result.replan_count, 0)
+
     def test_original_summoning_uses_shared_prepare_pipeline(self) -> None:
         operators = WPAOperators(evaluator=None)
         wolf = _build_wolf([[self.tasks[0], self.tasks[1], self.tasks[2]]])

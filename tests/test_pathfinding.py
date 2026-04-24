@@ -30,6 +30,33 @@ class PlannerBehaviorTests(unittest.TestCase):
         self.assertEqual(path[:3], [(0, 0, 0), (0, 0, 1), (1, 0, 2)])
         self.assertEqual(path[-1], (3, 0, 4))
 
+    def test_corridor_avoids_opposite_edge_conflict_inside_search(self) -> None:
+        grid = np.ones((Config.MAP_WIDTH, Config.MAP_HEIGHT), dtype=int)
+        for x in range(3):
+            grid[x][0] = 0
+
+        planner = TentDFSPlanner(grid)
+        path = planner.plan(
+            (0, 0),
+            (2, 0),
+            0,
+            set(),
+            occupied_edges={((1, 0), (0, 0), 1)},
+        )
+
+        self.assertIsNotNone(path)
+        self.assertEqual(path[:3], [(0, 0, 0), (0, 0, 1), (1, 0, 2)])
+        self.assertEqual(path[-1], (2, 0, 3))
+
+    def test_custom_max_time_allows_long_but_feasible_wait(self) -> None:
+        planner = TentDFSPlanner(np.zeros((Config.MAP_WIDTH, Config.MAP_HEIGHT), dtype=int))
+        reservations = {(1, 0, t) for t in range(1, 61)}
+
+        path = planner.plan((0, 0), (1, 0), 0, reservations, max_time=80)
+
+        self.assertIsNotNone(path)
+        self.assertEqual(path[-1], (1, 0, 61))
+
     def test_wall_with_single_gap_keeps_near_optimal_arrival(self) -> None:
         grid = np.zeros((Config.MAP_WIDTH, Config.MAP_HEIGHT), dtype=int)
         for y in range(5):

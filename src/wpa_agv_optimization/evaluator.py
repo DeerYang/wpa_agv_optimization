@@ -378,12 +378,16 @@ class WolfEvaluator:
 
                 while retries <= max_retries:
                     plan_start_time = curr_time
+                    base_time_budget = max(20, manhattan_dist(curr_pos, target_pos) * 4 + 30)
+                    planning_max_time = curr_time + base_time_budget + (retries * 16)
                     segment_path = self.planner.plan(
                         curr_pos,
                         target_pos,
                         curr_time,
                         reservation_table,
                         extra_blocks=temporary_blocks,
+                        occupied_edges=occupied_edges,
+                        max_time=planning_max_time,
                     )
 
                     if segment_path is None:
@@ -465,6 +469,7 @@ class WolfEvaluator:
                         has_cycle=cycle is not None,
                         node=conflict.get("node"),
                         edge=conflict.get("edge"),
+                        current_deadline_a=(target.deadline if target is not None else None),
                     )
 
                     action = event.action
@@ -476,6 +481,8 @@ class WolfEvaluator:
                             action = "replan"
                     elif event.risk_score >= self.traffic_manager.deadlock_risk_threshold:
                         agv_deadlock_risk_count += 1
+                    elif action == "wait" and event.agv_high == agv.id:
+                        action = "reroute"
 
                     if action == "reroute":
                         agv_reroute_count += 1

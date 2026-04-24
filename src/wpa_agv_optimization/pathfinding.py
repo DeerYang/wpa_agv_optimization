@@ -70,8 +70,18 @@ class TentDFSPlanner:
             curr = parent_map[curr]
         return path[::-1]
 
-    def plan(self, start_pos, end_pos, start_time, reservation_table, extra_blocks=None):
+    def plan(
+        self,
+        start_pos,
+        end_pos,
+        start_time,
+        reservation_table,
+        extra_blocks=None,
+        occupied_edges=None,
+        max_time=None,
+    ):
         extra_blocks = set() if extra_blocks is None else extra_blocks
+        occupied_edges = set() if occupied_edges is None else occupied_edges
         start_state = (start_pos, start_time)
         parent_map = {start_state: None}
         best_cost = {start_state: start_time}
@@ -82,13 +92,15 @@ class TentDFSPlanner:
         neighbor_cache = self._neighbor_cache
         reservation_contains = reservation_table.__contains__
         extra_contains = extra_blocks.__contains__
+        occupied_edge_contains = occupied_edges.__contains__
         best_cost_get = best_cost.get
         heap_push = heapq.heappush
         heap_pop = heapq.heappop
 
         base_dist = dist_map.get(start_pos, heuristic_fallback(start_pos, end_pos))
         max_steps = 120000
-        max_time = start_time + max(20, base_dist * 4 + 30)
+        if max_time is None:
+            max_time = start_time + max(20, base_dist * 4 + 30)
         steps = 0
 
         open_heap = []
@@ -122,6 +134,8 @@ class TentDFSPlanner:
             for next_pos in neighbor_cache.get(curr_pos, ()):
                 timed_node = (next_pos[0], next_pos[1], ntime)
                 if reservation_contains(timed_node) or extra_contains(timed_node):
+                    continue
+                if occupied_edge_contains((next_pos, curr_pos, ntime)):
                     continue
 
                 next_state = (next_pos, ntime)
