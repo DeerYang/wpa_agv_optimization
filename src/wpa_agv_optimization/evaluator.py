@@ -37,6 +37,27 @@ class WolfEvaluator:
         return max(1, manhattan_dist(agv.start_pos, (last_task.x, last_task.y)))
 
     @staticmethod
+    def _segment_travel_distance(path: List[TimedNode]) -> int:
+        """Count physical grid movement edges in one timed path segment."""
+        total = 0
+        for idx in range(len(path) - 1):
+            prev = (path[idx][0], path[idx][1])
+            curr = (path[idx + 1][0], path[idx + 1][1])
+            total += manhattan_dist(prev, curr)
+        return total
+
+    @staticmethod
+    def _segment_wait_time(path: List[TimedNode]) -> int:
+        """Count explicit wait actions in one timed path segment."""
+        total = 0
+        for idx in range(len(path) - 1):
+            prev = path[idx]
+            curr = path[idx + 1]
+            if (prev[0], prev[1]) == (curr[0], curr[1]):
+                total += max(0, int(curr[2]) - int(prev[2]))
+        return total
+
+    @staticmethod
     def _resource_key(conflict: Dict[str, object]) -> str:
         """把冲突位置转成可计数的资源签名。"""
         if conflict["kind"] == "edge":
@@ -124,6 +145,10 @@ class WolfEvaluator:
         target_agv.load = base_agv.load
         target_agv.path = list(base_agv.path)
         target_agv.finish_time = base_agv.finish_time
+        target_agv.travel_distance = getattr(base_agv, "travel_distance", 0)
+        target_agv.wait_time = getattr(base_agv, "wait_time", 0)
+        target_agv.service_time = getattr(base_agv, "service_time", 0)
+        target_agv.task_completion_times = dict(getattr(base_agv, "task_completion_times", {}))
         target_agv._task_signature = tuple(getattr(base_agv, "_task_signature", ()))
         target_agv._reserved_nodes = set(getattr(base_agv, "_reserved_nodes", set()))
         target_agv._reserved_edges = set(getattr(base_agv, "_reserved_edges", set()))
@@ -155,6 +180,8 @@ class WolfEvaluator:
             "wait_counts": {},
             "agv_map": {agv.id: agv for agv in wolf.agv_list},
             "total_dist": 0,
+            "total_wait_time": 0,
+            "total_service_time": 0,
             "total_time_penalty": 0,
             "conflict_count": 0,
             "deadlock_count": 0,
@@ -188,6 +215,8 @@ class WolfEvaluator:
 
             cached_metrics = target_agv._cached_metrics
             state["total_dist"] += int(cached_metrics.get("dist", 0))
+            state["total_wait_time"] += int(cached_metrics.get("wait_time", 0))
+            state["total_service_time"] += int(cached_metrics.get("service_time", 0))
             state["total_time_penalty"] += float(cached_metrics.get("time_penalty", 0))
             state["conflict_count"] += int(cached_metrics.get("conflict_count", 0))
             state["deadlock_count"] += int(cached_metrics.get("deadlock_count", 0))
@@ -301,6 +330,8 @@ class WolfEvaluator:
         wait_counts: Dict[int, int] = state["wait_counts"]
         agv_map: Dict[int, object] = state["agv_map"]
         total_dist = state["total_dist"]
+        total_wait_time = state["total_wait_time"]
+        total_service_time = state["total_service_time"]
         total_time_penalty = state["total_time_penalty"]
         conflict_count = state["conflict_count"]
         deadlock_count = state["deadlock_count"]
@@ -326,7 +357,11 @@ class WolfEvaluator:
             agv_replan_count = 0
             agv_reroute_count = 0
             agv_time_penalty = 0
+            agv_travel_distance = 0
+            agv_wait_time = 0
+            agv_service_time = 0
             agv_unfinished_count = 0
+            task_completion_times: Dict[int, int] = {}
             agv_aborted = False
 
             targets = list(agv.tasks)
@@ -355,7 +390,7 @@ class WolfEvaluator:
                         agv_replan_count += 1
                         wait_counts[agv.id] += 1
                         curr_time += 1
-                        curr_time, wait_conflict = self._reserve_wait_window(
+                        actual_end_time, wait_conflict = self._reserve_wait_window(
                             agv_id=agv.id,
                             pos=curr_pos,
                             start_time=plan_start_time,
@@ -364,6 +399,8 @@ class WolfEvaluator:
                             reservation_owner=reservation_owner,
                             agv_reserved_nodes=agv_reserved_nodes,
                         )
+                        agv_wait_time += max(0, actual_end_time - plan_start_time)
+                        curr_time = actual_end_time
                         if wait_conflict is not None:
                             temporary_blocks |= self._temporary_blocks_for_conflict(wait_conflict)
                         retries += 1
@@ -455,7 +492,7 @@ class WolfEvaluator:
                         if "arrive_time" in conflict:
                             temporary_blocks |= self._temporary_blocks_for_conflict(conflict)
 
-                    curr_time, wait_conflict = self._reserve_wait_window(
+                    actual_end_time, wait_conflict = self._reserve_wait_window(
                         agv_id=agv.id,
                         pos=curr_pos,
                         start_time=plan_start_time,
@@ -464,6 +501,8 @@ class WolfEvaluator:
                         reservation_owner=reservation_owner,
                         agv_reserved_nodes=agv_reserved_nodes,
                     )
+                    agv_wait_time += max(0, actual_end_time - plan_start_time)
+                    curr_time = actual_end_time
                     if wait_conflict is not None:
                         temporary_blocks |= self._temporary_blocks_for_conflict(wait_conflict)
 
@@ -487,10 +526,14 @@ class WolfEvaluator:
                     full_path.extend(segment_path)
 
                 last_node = segment_path[-1]
+                agv_travel_distance += self._segment_travel_distance(segment_path)
+                agv_wait_time += self._segment_wait_time(segment_path)
+                agv_service_time += Config.SERVICE_TIME
                 curr_pos = (last_node[0], last_node[1])
                 curr_time = last_node[2] + Config.SERVICE_TIME
                 if target is not None:
                     agv_time_penalty += max(0, curr_time - target.deadline)
+                    task_completion_times[target.id] = curr_time
 
                 for point in segment_path:
                     reservation_table.add(point)
@@ -522,11 +565,17 @@ class WolfEvaluator:
 
             agv.path = full_path
             agv.finish_time = curr_time
+            agv.travel_distance = agv_travel_distance
+            agv.wait_time = agv_wait_time
+            agv.service_time = agv_service_time
+            agv.task_completion_times = task_completion_times
             agv._task_signature = self._task_signature(agv)
             agv._reserved_nodes = agv_reserved_nodes
             agv._reserved_edges = agv_reserved_edges
             agv._cached_metrics = {
-                "dist": len(full_path),
+                "dist": agv_travel_distance,
+                "wait_time": agv_wait_time,
+                "service_time": agv_service_time,
                 "time_penalty": agv_time_penalty,
                 "conflict_count": agv_conflict_count,
                 "deadlock_count": agv_deadlock_count,
@@ -536,7 +585,9 @@ class WolfEvaluator:
                 "unfinished_count": agv_unfinished_count,
             }
 
-            total_dist += len(full_path)
+            total_dist += agv_travel_distance
+            total_wait_time += agv_wait_time
+            total_service_time += agv_service_time
             total_time_penalty += agv_time_penalty
             conflict_count += agv_conflict_count
             deadlock_count += agv_deadlock_count
@@ -546,6 +597,8 @@ class WolfEvaluator:
             total_unfinished += agv_unfinished_count
 
         wolf.total_dist = total_dist
+        wolf.total_wait_time = total_wait_time
+        wolf.total_service_time = total_service_time
         wolf.time_penalty = total_time_penalty
         wolf.vehicle_num = len([agv for agv in wolf.agv_list if agv.tasks])
         wolf.fitness = (

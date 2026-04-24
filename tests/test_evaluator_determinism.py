@@ -55,6 +55,18 @@ class DeterministicEvaluationTests(unittest.TestCase):
         self.assertEqual(r1.fitness, r2.fitness)
         self.assertEqual(r1.agv_list[1].path, r2.agv_list[1].path)
 
+    def test_total_dist_counts_movement_edges_not_path_nodes(self) -> None:
+        task = Task(10, 2, 0, 10, 500)
+        wolf = _build_wolf([[task]])
+
+        result = WolfEvaluator(self.grid_map).rebuild_wolf(wolf)
+
+        expected_distance = 2 + abs(Config.DEPOT_NODE[0] - task.x) + abs(Config.DEPOT_NODE[1] - task.y)
+        self.assertEqual(result.total_dist, expected_distance)
+        self.assertEqual(result.agv_list[0].travel_distance, expected_distance)
+        self.assertEqual(result.agv_list[0].task_completion_times[task.id], 2 + Config.SERVICE_TIME)
+        self.assertEqual(result.agv_list[0].finish_time, result.agv_list[0].path[-1][2] + Config.SERVICE_TIME)
+
 
 if __name__ == "__main__":
     unittest.main()

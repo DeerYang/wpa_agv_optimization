@@ -54,6 +54,14 @@ class AGV:
         self.tasks = []
         # 该车完整时空路径，元素格式为 (x, y, t)。
         self.path = []
+        # 真实移动距离（等待与服务时间不计入距离）。
+        self.travel_distance = 0
+        # 规划等待与冲突让行等待时间。
+        self.wait_time = 0
+        # 服务/卸货占用时间。
+        self.service_time = 0
+        # 每个任务完成服务后的时刻：task_id -> time。
+        self.task_completion_times = {}
         # 当前总载重（kg）。
         self.load = 0
         # 执行完全部任务并完成服务时间后的结束时刻。
@@ -78,6 +86,10 @@ class Wolf:
         self.vehicle_num = 0
         # 总行驶距离 D。
         self.total_dist = 0
+        # 系统总等待时间。
+        self.total_wait_time = 0
+        # 系统总服务时间。
+        self.total_service_time = 0
         # 时间窗总惩罚 T。
         self.time_penalty = 0
         # 冲突处理次数统计。

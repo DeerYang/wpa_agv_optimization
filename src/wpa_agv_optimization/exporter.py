@@ -140,12 +140,20 @@ def export_result_json(
     # 构建 AGV 列表
     agvs = []
     for agv in wolf.agv_list:
+        task_completion_times = {
+            str(int(task_id)): int(finish_time)
+            for task_id, finish_time in getattr(agv, "task_completion_times", {}).items()
+        }
         agv_data = {
             "id": int(agv.id),
             "start_pos": [int(agv.start_pos[0]), int(agv.start_pos[1])],
             "tasks": [int(t.id) for t in agv.tasks],
             "load": int(agv.load),
             "finish_time": int(agv.finish_time),
+            "travel_distance": int(getattr(agv, "travel_distance", len(getattr(agv, "path", [])))),
+            "wait_time": int(getattr(agv, "wait_time", 0)),
+            "service_time": int(getattr(agv, "service_time", 0)),
+            "task_completion_times": task_completion_times,
             "path": [[int(x), int(y), int(t)] for x, y, t in agv.path],
         }
         agvs.append(agv_data)
@@ -177,6 +185,10 @@ def export_result_json(
             "replan_count": int(getattr(wolf, "replan_count", 0)),
             "reroute_count": int(getattr(wolf, "reroute_count", 0)),
             "unfinished_count": int(getattr(wolf, "unfinished_count", 0)),
+        },
+        "timing": {
+            "wait_time": int(getattr(wolf, "total_wait_time", 0)),
+            "service_time": int(getattr(wolf, "total_service_time", 0)),
         },
         "convergence": convergence or [],
     }

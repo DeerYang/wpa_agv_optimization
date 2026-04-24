@@ -29,6 +29,10 @@ class DummyAgv:
         self.tasks = [DummyTask(1, 2, 3, 10, 50)]
         self.load = 10
         self.finish_time = 12
+        self.travel_distance = 5
+        self.wait_time = 1
+        self.service_time = 2
+        self.task_completion_times = {1: 10}
         self.path = [(0, 0, 0), (2, 3, 12)]
 
 
@@ -44,6 +48,8 @@ class DummyWolf:
         self.deadlock_risk_count = 0
         self.replan_count = 0
         self.reroute_count = 0
+        self.total_wait_time = 1
+        self.total_service_time = 2
 
 
 class ExporterTests(unittest.TestCase):
@@ -95,6 +101,13 @@ class ExporterTests(unittest.TestCase):
                 ]
             },
         )
+
+        payload = json.loads(output_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["agvs"][0]["travel_distance"], 5)
+        self.assertEqual(payload["agvs"][0]["wait_time"], 1)
+        self.assertEqual(payload["agvs"][0]["service_time"], 2)
+        self.assertEqual(payload["agvs"][0]["task_completion_times"], {"1": 10})
+        self.assertEqual(payload["timing"], {"wait_time": 1, "service_time": 2})
 
 
 if __name__ == "__main__":

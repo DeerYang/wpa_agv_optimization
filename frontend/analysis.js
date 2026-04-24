@@ -10,8 +10,14 @@
   function computeTaskDeliveryTimes(agv, allTasks) {
     const result = {};
     const taskMap = buildTaskMap(allTasks);
+    const exportedCompletionTimes = agv.task_completion_times || {};
 
     for (const taskId of agv.tasks || []) {
+      if (exportedCompletionTimes[taskId] !== undefined) {
+        result[taskId] = Number(exportedCompletionTimes[taskId]);
+        continue;
+      }
+
       const task = taskMap[taskId];
       if (!task) {
         continue;
@@ -24,6 +30,27 @@
       }
     }
     return result;
+  }
+
+  function getRunMaxTime(data) {
+    let maxTime = 0;
+    for (const agv of data.agvs || []) {
+      if ((agv.path || []).length > 0) {
+        const lastTime = agv.path[agv.path.length - 1][2];
+        if (lastTime > maxTime) {
+          maxTime = lastTime;
+        }
+      }
+      if (agv.finish_time !== undefined && Number(agv.finish_time) > maxTime) {
+        maxTime = Number(agv.finish_time);
+      }
+      for (const finishTime of Object.values(agv.task_completion_times || {})) {
+        if (Number(finishTime) > maxTime) {
+          maxTime = Number(finishTime);
+        }
+      }
+    }
+    return maxTime;
   }
 
   function getPathPositionAtTime(agv, timeStep) {
@@ -174,6 +201,7 @@
     buildTaskMap,
     buildTaskAssignments,
     computeTaskDeliveryTimes,
+    getRunMaxTime,
     getPathPositionAtTime,
     getAgvCurrentTarget,
     summarizeAtTime,

@@ -12,6 +12,7 @@
 const {
   buildTaskAssignments,
   computeTaskDeliveryTimes,
+  getRunMaxTime,
   getPathPositionAtTime,
   getAgvCurrentTarget,
   summarizeAtTime,
@@ -208,14 +209,8 @@ function loadData(json) {
   isolateFocus = false;
   toggleIsolateFocus.checked = false;
 
-  maxTime = 0;
+  maxTime = getRunMaxTime(data);
   for (const agv of data.agvs) {
-    if ((agv.path || []).length > 0) {
-      const lastTime = agv.path[agv.path.length - 1][2];
-      if (lastTime > maxTime) {
-        maxTime = lastTime;
-      }
-    }
     agv._taskDeliveryTimes = computeTaskDeliveryTimes(agv, data.tasks);
   }
   data._taskOwners = buildTaskAssignments(data);

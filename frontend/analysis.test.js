@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 
 const {
   computeTaskDeliveryTimes,
+  getRunMaxTime,
   getAgvCurrentTarget,
   summarizeAtTime,
   buildEventTimeline,
@@ -76,6 +77,29 @@ const sampleData = {
 runTest("computeTaskDeliveryTimes returns the first arrival time for each task", () => {
   const deliveryTimes = computeTaskDeliveryTimes(sampleAgvs[0], sampleTasks);
   assert.deepEqual(deliveryTimes, { 1: 4, 2: 10 });
+});
+
+runTest("computeTaskDeliveryTimes prefers exported completion times", () => {
+  const deliveryTimes = computeTaskDeliveryTimes(
+    {
+      ...sampleAgvs[0],
+      task_completion_times: { 1: 6, 2: 12 },
+    },
+    sampleTasks,
+  );
+  assert.deepEqual(deliveryTimes, { 1: 6, 2: 12 });
+});
+
+runTest("getRunMaxTime includes finish_time after the last path point", () => {
+  assert.equal(getRunMaxTime(sampleData), 13);
+  assert.equal(getRunMaxTime({
+    agvs: [
+      {
+        finish_time: 15,
+        path: [[0, 0, 0], [1, 0, 3]],
+      },
+    ],
+  }), 15);
 });
 
 runTest("getAgvCurrentTarget returns the next unfinished task and then depot", () => {
