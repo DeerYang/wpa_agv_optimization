@@ -192,6 +192,57 @@ class OriginalWPAFlowTests(unittest.TestCase):
         self.assertTrue(entered_besiege)
         self.assertFalse(became_leader)
 
+    def test_summoning_stops_when_decoded_order_stagnates(self) -> None:
+        task_list = [Task(1, 1, 1, 10, 10), Task(2, 2, 2, 10, 10), Task(3, 3, 3, 10, 10)]
+        optimizer = OriginalWPAOptimizer(
+            self.grid_map,
+            task_list,
+            config=OriginalWPAConfig(
+                alpha=4,
+                beta=6,
+                max_walks=4,
+                omega=500.0,
+                step_factor=1000.0,
+                max_summon_steps=2000,
+                summon_order_patience=3,
+                max_new_orders_per_summon=80,
+            ),
+            rng=random.Random(0),
+        )
+        optimizer.step_b = np.array([0.01, 0.01, 0.01], dtype=float)
+        optimizer.d_near = 0.001
+        fierce = PaperWolfState(
+            position=np.array([0.0, 10.0, 20.0], dtype=float),
+            wolf=None,
+            fitness=10.0,
+            smell=-10.0,
+        )
+        leader = PaperWolfState(
+            position=np.array([1.0, 11.0, 21.0], dtype=float),
+            wolf=None,
+            fitness=1.0,
+            smell=-1.0,
+        )
+        calls = 0
+
+        def fake_evaluate(position, base_wolf=None):
+            nonlocal calls
+            calls += 1
+            return PaperWolfState(
+                position=np.array(position, dtype=float),
+                wolf=None,
+                fitness=10.0,
+                smell=-10.0,
+            )
+
+        with mock.patch.object(optimizer, "_evaluate_position", side_effect=fake_evaluate):
+            candidate, entered_besiege, became_leader = optimizer._summoning(fierce, leader)
+
+        self.assertEqual(calls, 3)
+        self.assertTrue(entered_besiege)
+        self.assertFalse(became_leader)
+        self.assertEqual(optimizer._order_signature(candidate.position), optimizer._order_signature(fierce.position))
+
 
 if __name__ == "__main__":
     unittest.main()

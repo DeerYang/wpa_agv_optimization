@@ -25,7 +25,9 @@ class OriginalWPAConfig:
     step_factor: float = 1000.0
     h_min: int = 4
     h_max: int = 8
-    max_summon_steps: int = 2000
+    max_summon_steps: int = 300
+    summon_order_patience: int = 6
+    max_new_orders_per_summon: int = 30
 
 
 @dataclass
@@ -372,6 +374,8 @@ class OriginalWPAOptimizer:
     def _summoning(self, fierce: PaperWolfState, leader: PaperWolfState) -> tuple[PaperWolfState, bool, bool]:
         current = fierce
         steps = 0
+        stagnant_order_steps = 0
+        seen_orders = {self._order_signature(current.position)}
         recent_positions = [self._position_signature(current)]
         while self._distance(current, leader) > self.d_near and steps < self.config.max_summon_steps:
             delta = leader.position - current.position
@@ -379,10 +383,24 @@ class OriginalWPAOptimizer:
             if np.array_equal(direction, np.zeros_like(direction)):
                 break
 
-            candidate = self._evaluate_position(current.position + (self.step_b * direction), base_wolf=current.wolf)
+            current_order = self._order_signature(current.position)
+            next_position = self._clip(current.position + (self.step_b * direction))
+            next_order = self._order_signature(next_position)
+            if next_order == current_order:
+                stagnant_order_steps += 1
+            else:
+                stagnant_order_steps = 0
+                seen_orders.add(next_order)
+
+            candidate = self._evaluate_position(next_position, base_wolf=current.wolf)
             current = candidate
             if current.smell > leader.smell:
                 return current, False, True
+
+            if stagnant_order_steps >= self.config.summon_order_patience:
+                return current, True, False
+            if len(seen_orders) >= self.config.max_new_orders_per_summon:
+                return current, True, False
 
             recent_positions.append(self._position_signature(current))
             if len(recent_positions) >= 3 and recent_positions[-1] == recent_positions[-3]:
