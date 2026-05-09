@@ -3,7 +3,6 @@
 ## Fixed Protocol
 
 - Main scenarios: `1 2 3`
-- Supplementary scenarios: `4 5` (run separately)
 - Runs per scenario: `10`
 - Base seed: `20260220`
 - Metrics: `F / N / D / T / conflict / replan / risk`

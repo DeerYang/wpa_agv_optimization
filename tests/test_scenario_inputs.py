@@ -10,6 +10,9 @@ from src.wpa_agv_optimization.utils import is_valid_pick_location
 
 
 class ScenarioTaskPositionTests(unittest.TestCase):
+    def test_scenario_library_contains_only_main_scenarios(self) -> None:
+        self.assertEqual(len(SCENARIO_LIBRARY), 3)
+
     def test_all_scenarios_load_without_error(self) -> None:
         for idx in range(1, len(SCENARIO_LIBRARY) + 1):
             load_scenario(idx)

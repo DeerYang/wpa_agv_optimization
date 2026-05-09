@@ -40,7 +40,6 @@ CSV_FIELDS = [
 ]
 
 MAIN_SCENARIOS = [1, 2, 3]
-SUPPLEMENTARY_SCENARIOS = [4, 5]
 DEFAULT_RUNS = 10
 DEFAULT_BASE_SEED = 20260220
 
@@ -308,7 +307,6 @@ def write_markdown(md_path: str, all_rows: list[dict]) -> None:
         handle.write("# Benchmark Results\n\n")
         handle.write("## Fixed Protocol\n\n")
         handle.write(f"- Main scenarios: `{MAIN_SCENARIOS[0]} {MAIN_SCENARIOS[1]} {MAIN_SCENARIOS[2]}`\n")
-        handle.write(f"- Supplementary scenarios: `{SUPPLEMENTARY_SCENARIOS[0]} {SUPPLEMENTARY_SCENARIOS[1]}` (run separately)\n")
         handle.write(f"- Runs per scenario: `{DEFAULT_RUNS}`\n")
         handle.write(f"- Base seed: `{DEFAULT_BASE_SEED}`\n")
         handle.write("- Metrics: `F / N / D / T / conflict / replan / risk`\n")
