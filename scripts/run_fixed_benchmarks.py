@@ -146,7 +146,7 @@ def export_best_scenario_examples(rows: list[dict], algorithm: str, project_root
             wolf=result.wolf,
             grid_map=grid_map,
             task_list=task_list,
-            convergence=[],
+            convergence=result.convergence,
             scenario_name=result.scenario_name,
             algorithm=algorithm,
             seed=result.seed,

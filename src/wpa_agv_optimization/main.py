@@ -41,6 +41,7 @@ class RunResult:
     replan_count: int
     reroute_count: int
     unfinished_count: int
+    convergence: list[dict[str, float | int]]
     wolf: Any
 
 
@@ -381,6 +382,7 @@ def _run_algorithm_impl(
         replan_count=int(getattr(global_best_wolf, "replan_count", 0)),
         reroute_count=int(getattr(global_best_wolf, "reroute_count", 0)),
         unfinished_count=int(getattr(global_best_wolf, "unfinished_count", 0)),
+        convergence=convergence,
         wolf=global_best_wolf,
     )
 
@@ -422,6 +424,7 @@ def result_to_metrics(result: RunResult) -> dict[str, float | int | str | None]:
     data["N"] = data.pop("vehicle_num")
     data["D"] = data.pop("total_dist")
     data["T"] = data.pop("time_penalty")
+    data.pop("convergence", None)
     data.pop("wolf", None)
     return data
 

@@ -36,6 +36,7 @@ class BenchmarkExportTests(unittest.TestCase):
             scenario_name="场景",
             seed=999,
             algorithm="improved",
+            convergence=[{"iter": 1, "best_fitness": 250.0}],
             wolf=SimpleNamespace(),
         )
         project_root = self.make_project_root('benchmark-export')
@@ -51,6 +52,8 @@ class BenchmarkExportTests(unittest.TestCase):
 
         self.assertEqual(mocked_run.call_count, 2)
         self.assertEqual(mocked_export.call_count, 2)
+        for call in mocked_export.call_args_list:
+            self.assertEqual(call.kwargs["convergence"], run_result.convergence)
         exported_paths = [Path(call.kwargs["output_path"]) for call in mocked_export.call_args_list]
         self.assertEqual(
             exported_paths,

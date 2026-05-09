@@ -3323,5 +3323,206 @@
     "wait_time": 1,
     "service_time": 46
   },
-  "convergence": []
+  "convergence": [
+    {
+      "iter": 1,
+      "best_fitness": 2507.0
+    },
+    {
+      "iter": 2,
+      "best_fitness": 2507.0
+    },
+    {
+      "iter": 3,
+      "best_fitness": 2507.0
+    },
+    {
+      "iter": 4,
+      "best_fitness": 2507.0
+    },
+    {
+      "iter": 5,
+      "best_fitness": 2505.0
+    },
+    {
+      "iter": 6,
+      "best_fitness": 2505.0
+    },
+    {
+      "iter": 7,
+      "best_fitness": 2505.0
+    },
+    {
+      "iter": 8,
+      "best_fitness": 2505.0
+    },
+    {
+      "iter": 9,
+      "best_fitness": 2505.0
+    },
+    {
+      "iter": 10,
+      "best_fitness": 2505.0
+    },
+    {
+      "iter": 11,
+      "best_fitness": 2505.0
+    },
+    {
+      "iter": 12,
+      "best_fitness": 2505.0
+    },
+    {
+      "iter": 13,
+      "best_fitness": 2395.0
+    },
+    {
+      "iter": 14,
+      "best_fitness": 2395.0
+    },
+    {
+      "iter": 15,
+      "best_fitness": 2261.0
+    },
+    {
+      "iter": 16,
+      "best_fitness": 2261.0
+    },
+    {
+      "iter": 17,
+      "best_fitness": 1888.0
+    },
+    {
+      "iter": 18,
+      "best_fitness": 1888.0
+    },
+    {
+      "iter": 19,
+      "best_fitness": 1750.0
+    },
+    {
+      "iter": 20,
+      "best_fitness": 1750.0
+    },
+    {
+      "iter": 21,
+      "best_fitness": 1750.0
+    },
+    {
+      "iter": 22,
+      "best_fitness": 1750.0
+    },
+    {
+      "iter": 23,
+      "best_fitness": 1750.0
+    },
+    {
+      "iter": 24,
+      "best_fitness": 1750.0
+    },
+    {
+      "iter": 25,
+      "best_fitness": 1750.0
+    },
+    {
+      "iter": 26,
+      "best_fitness": 1238.0
+    },
+    {
+      "iter": 27,
+      "best_fitness": 1238.0
+    },
+    {
+      "iter": 28,
+      "best_fitness": 1238.0
+    },
+    {
+      "iter": 29,
+      "best_fitness": 1238.0
+    },
+    {
+      "iter": 30,
+      "best_fitness": 1238.0
+    },
+    {
+      "iter": 31,
+      "best_fitness": 1238.0
+    },
+    {
+      "iter": 32,
+      "best_fitness": 1238.0
+    },
+    {
+      "iter": 33,
+      "best_fitness": 1238.0
+    },
+    {
+      "iter": 34,
+      "best_fitness": 1238.0
+    },
+    {
+      "iter": 35,
+      "best_fitness": 1238.0
+    },
+    {
+      "iter": 36,
+      "best_fitness": 1238.0
+    },
+    {
+      "iter": 37,
+      "best_fitness": 1238.0
+    },
+    {
+      "iter": 38,
+      "best_fitness": 1236.0
+    },
+    {
+      "iter": 39,
+      "best_fitness": 1236.0
+    },
+    {
+      "iter": 40,
+      "best_fitness": 1236.0
+    },
+    {
+      "iter": 41,
+      "best_fitness": 1236.0
+    },
+    {
+      "iter": 42,
+      "best_fitness": 1236.0
+    },
+    {
+      "iter": 43,
+      "best_fitness": 1236.0
+    },
+    {
+      "iter": 44,
+      "best_fitness": 1236.0
+    },
+    {
+      "iter": 45,
+      "best_fitness": 1236.0
+    },
+    {
+      "iter": 46,
+      "best_fitness": 1236.0
+    },
+    {
+      "iter": 47,
+      "best_fitness": 1236.0
+    },
+    {
+      "iter": 48,
+      "best_fitness": 1236.0
+    },
+    {
+      "iter": 49,
+      "best_fitness": 1236.0
+    },
+    {
+      "iter": 50,
+      "best_fitness": 1236.0
+    }
+  ]
 }
