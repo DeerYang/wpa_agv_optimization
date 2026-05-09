@@ -931,6 +931,10 @@ body {
   }
 
   .algorithm-buttons {
-    display: none;
+    gap: 3px;
+  }
+  .algorithm-chip {
+    padding: 2px 6px;
+    font-size: 10px;
   }
 }

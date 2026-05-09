@@ -79,7 +79,6 @@ const btnStepBack = document.getElementById("btn-step-back");
 const btnReset = document.getElementById("btn-reset");
 const btnClearFocus = document.getElementById("btn-clear-focus");
 const speedSelect = document.getElementById("speed-select");
-const algorithmSelect = document.getElementById("algorithm-select");
 const algorithmButtons = document.getElementById("algorithm-buttons");
 const sampleSelect = document.getElementById("sample-select");
 const progressBar = document.getElementById("progress-bar");
@@ -98,12 +97,6 @@ const tabEvents = document.getElementById("tab-events");
 /* ========================================
    Event Listeners
    ======================================== */
-
-algorithmSelect.addEventListener("change", async () => {
-  currentAlgorithmKey = algorithmSelect.value;
-  syncAlgorithmButtons();
-  await loadSelectedSource();
-});
 
 sampleSelect.addEventListener("change", async () => {
   await loadSelectedSource();
@@ -304,16 +297,8 @@ async function fetchManifest() {
 
 function updateAlgorithmOptions(options) {
   const currentValue = currentAlgorithmKey;
-  algorithmSelect.innerHTML = "";
-  for (const option of options) {
-    const el = document.createElement("option");
-    el.value = option.key;
-    el.textContent = option.label;
-    algorithmSelect.appendChild(el);
-  }
   const availableKeys = options.map((o) => o.key);
   currentAlgorithmKey = availableKeys.includes(currentValue) ? currentValue : availableKeys[0];
-  algorithmSelect.value = currentAlgorithmKey;
   renderAlgorithmButtons(options);
   syncAlgorithmButtons();
 }
@@ -329,7 +314,6 @@ function renderAlgorithmButtons(options) {
     button.addEventListener("click", async () => {
       if (currentAlgorithmKey === option.key) return;
       currentAlgorithmKey = option.key;
-      algorithmSelect.value = option.key;
       syncAlgorithmButtons();
       await loadSelectedSource();
     });
