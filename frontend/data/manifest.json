@@ -1,6 +1,16 @@
 {
   "variants": [
     {
+      "key": "ga",
+      "label": "ga",
+      "files": [
+        "result.json",
+        "scenario-1.json",
+        "scenario-2.json",
+        "scenario-3.json"
+      ]
+    },
+    {
       "key": "improved",
       "label": "improved",
       "files": [
@@ -13,6 +23,16 @@
     {
       "key": "original",
       "label": "original",
+      "files": [
+        "result.json",
+        "scenario-1.json",
+        "scenario-2.json",
+        "scenario-3.json"
+      ]
+    },
+    {
+      "key": "sa",
+      "label": "sa",
       "files": [
         "result.json",
         "scenario-1.json",

@@ -11,6 +11,7 @@ from typing import Any
 
 import numpy as np
 
+from .classic_baselines import ClassicBaselineConfig, run_classic_baseline
 from .config import Config
 from .evaluator import WolfEvaluator
 from .exporter import export_result_json
@@ -115,9 +116,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--algorithm",
-        choices=["improved", "original"],
+        choices=["improved", "original", "ga", "sa"],
         default="improved",
-        help="算法版本：improved 为当前改进版，original 为论文严格对应的原始WPA版。",
+        help="算法版本：improved/original 为WPA版本，ga/sa 为经典对比算法。",
     )
     parser.add_argument(
         "--quiet",
@@ -219,6 +220,20 @@ def _run_original_paper_algorithm(grid_map, task_list, max_iter, *, verbose: boo
 
 
 
+def _run_classic_baseline_algorithm(grid_map, task_list, algorithm: str, max_iter):
+    """Run a classic sequence-optimization baseline."""
+    result = run_classic_baseline(
+        algorithm=algorithm,
+        grid_map=grid_map,
+        task_list=task_list,
+        evaluator=WolfEvaluator(grid_map),
+        config=ClassicBaselineConfig(max_iter=max_iter, pop_size=Config.POP_SIZE),
+        rng=random,
+    )
+    return result.best_wolf, result.convergence
+
+
+
 def _run_algorithm_impl(
     scenario: int | None,
     seed: int | None,
@@ -267,6 +282,14 @@ def _run_algorithm_impl(
             task_list,
             max_iter,
             verbose=True,
+        )
+    elif algorithm in {"ga", "sa"}:
+        print(f"\n=== 2. 经典对比算法初始化，算法版本={algorithm} ===")
+        global_best_wolf, convergence = _run_classic_baseline_algorithm(
+            grid_map,
+            task_list,
+            algorithm,
+            max_iter,
         )
     else:
         print("\n=== 2. 狼群种群初始化 ===")

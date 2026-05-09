@@ -27,11 +27,14 @@
       <span class="header-sub">指挥中心</span>
     </div>
     <div class="header-right">
-      <div class="hud-select">
-        <select id="algorithm-select" aria-label="选择算法">
-          <option value="improved" selected>improved</option>
-          <option value="original">original</option>
-        </select>
+      <div class="algorithm-picker" aria-label="选择对比算法">
+        <div class="hud-select">
+          <select id="algorithm-select" aria-label="选择算法">
+            <option value="improved" selected>improved</option>
+            <option value="original">original</option>
+          </select>
+        </div>
+        <div id="algorithm-buttons" class="algorithm-buttons" aria-label="算法快捷选择"></div>
       </div>
       <div class="hud-select">
         <select id="sample-select" aria-label="选择数据来源">

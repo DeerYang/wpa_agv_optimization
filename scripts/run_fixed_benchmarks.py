@@ -40,6 +40,8 @@ CSV_FIELDS = [
 ]
 
 MAIN_SCENARIOS = [1, 2, 3]
+ALGORITHM_CHOICES = ["improved", "original", "ga", "sa"]
+SUMMARY_ALGORITHMS = ["original", "improved", "ga", "sa"]
 DEFAULT_RUNS = 10
 DEFAULT_BASE_SEED = 20260220
 
@@ -48,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run fixed-scenario benchmarks and append structured results."
     )
-    parser.add_argument("--algorithm", choices=["improved", "original"], default="improved")
+    parser.add_argument("--algorithm", choices=ALGORITHM_CHOICES, default="improved")
     parser.add_argument("--scenarios", type=int, nargs="+", default=MAIN_SCENARIOS)
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS)
     parser.add_argument("--csv", default="docs/benchmarks/benchmark_runs.csv")
@@ -293,14 +295,23 @@ def write_stability_table(handle, original_summary: list[dict], improved_summary
         )
 
 
+def algorithm_display_name(algorithm: str) -> str:
+    if algorithm in {"ga", "sa"}:
+        return algorithm.upper()
+    return algorithm.capitalize()
+
+
 def write_markdown(md_path: str, all_rows: list[dict]) -> None:
     md_file = Path(md_path)
     md_file.parent.mkdir(parents=True, exist_ok=True)
 
-    original_rows = latest_batch_rows(all_rows, "original")
-    improved_rows = latest_batch_rows(all_rows, "improved")
-    original_summary = summarize_by_scenario(original_rows) if original_rows else []
-    improved_summary = summarize_by_scenario(improved_rows) if improved_rows else []
+    summaries = {}
+    for algorithm in SUMMARY_ALGORITHMS:
+        rows = latest_batch_rows(all_rows, algorithm)
+        if rows:
+            summaries[algorithm] = summarize_by_scenario(rows)
+    original_summary = summaries.get("original", [])
+    improved_summary = summaries.get("improved", [])
     csv_path = md_file.with_name("benchmark_runs.csv")
 
     with md_file.open("w", encoding="utf-8") as handle:
@@ -316,14 +327,18 @@ def write_markdown(md_path: str, all_rows: list[dict]) -> None:
             write_compact_metric_table(handle, original_summary, improved_summary)
             handle.write("\n## Stability\n\n")
             write_stability_table(handle, original_summary, improved_summary)
-            handle.write("\n## Original Summary\n\n")
-            write_summary_table(handle, original_summary)
-            handle.write("\n## Improved Summary\n\n")
-            write_summary_table(handle, improved_summary)
+        for algorithm in SUMMARY_ALGORITHMS:
+            summary = summaries.get(algorithm)
+            if not summary:
+                continue
+            handle.write(f"\n## {algorithm_display_name(algorithm)} Summary\n\n")
+            write_summary_table(handle, summary)
 
         handle.write("\n## Current Batches\n\n")
-        handle.write(f"- Latest original batch: `{latest_batch_id(all_rows, 'original')}`\n")
-        handle.write(f"- Latest improved batch: `{latest_batch_id(all_rows, 'improved')}`\n")
+        for algorithm in SUMMARY_ALGORITHMS:
+            batch_id = latest_batch_id(all_rows, algorithm)
+            if batch_id is not None:
+                handle.write(f"- Latest {algorithm} batch: `{batch_id}`\n")
         handle.write(f"- Raw rows file: `{csv_path.as_posix()}`\n")
 
 

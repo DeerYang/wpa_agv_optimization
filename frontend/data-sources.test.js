@@ -34,7 +34,28 @@ runTest("buildAlgorithmOptions prefers manifest variants and falls back to defau
   assert.deepEqual(buildAlgorithmOptions(null), [
     { key: "improved", label: "improved" },
     { key: "original", label: "original" },
+    { key: "ga", label: "ga" },
+    { key: "sa", label: "sa" },
   ]);
+});
+
+runTest("buildAlgorithmOptions orders known algorithms by comparison priority", () => {
+  assert.deepEqual(
+    buildAlgorithmOptions({
+      variants: [
+        { key: "ga" },
+        { key: "improved" },
+        { key: "original" },
+        { key: "sa" },
+      ],
+    }),
+    [
+      { key: "improved", label: "improved" },
+      { key: "original", label: "original" },
+      { key: "ga", label: "ga" },
+      { key: "sa", label: "sa" },
+    ],
+  );
 });
 
 runTest("buildSourceLabel returns human readable labels", () => {

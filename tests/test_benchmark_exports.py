@@ -60,6 +60,46 @@ class BenchmarkExportTests(unittest.TestCase):
             ],
         )
 
+    def test_write_markdown_includes_classic_algorithm_summaries(self):
+        project_root = self.make_project_root("benchmark-md")
+        md_path = project_root / "benchmark_summary.md"
+
+        def row(algorithm: str, fitness: float) -> dict:
+            return {
+                "date": "2026-05-09",
+                "batch_id": f"batch-{algorithm}",
+                "algorithm": algorithm,
+                "scenario": 1,
+                "run": 1,
+                "seed": 1,
+                "F": fitness,
+                "N": 1,
+                "D": 10,
+                "T": 0.0,
+                "conflict_count": 0,
+                "replan_count": 0,
+                "deadlock_risk_count": 0,
+                "deadlock_count": 0,
+                "reroute_count": 0,
+                "unfinished_count": 0,
+            }
+
+        bench.write_markdown(
+            str(md_path),
+            [
+                row("original", 300.0),
+                row("improved", 200.0),
+                row("ga", 240.0),
+                row("sa", 260.0),
+            ],
+        )
+
+        text = md_path.read_text(encoding="utf-8")
+        self.assertIn("## GA Summary", text)
+        self.assertIn("## SA Summary", text)
+        self.assertIn("Latest ga batch", text)
+        self.assertIn("Latest sa batch", text)
+
 
 if __name__ == "__main__":
     unittest.main()

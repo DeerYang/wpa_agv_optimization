@@ -80,6 +80,7 @@ const btnReset = document.getElementById("btn-reset");
 const btnClearFocus = document.getElementById("btn-clear-focus");
 const speedSelect = document.getElementById("speed-select");
 const algorithmSelect = document.getElementById("algorithm-select");
+const algorithmButtons = document.getElementById("algorithm-buttons");
 const sampleSelect = document.getElementById("sample-select");
 const progressBar = document.getElementById("progress-bar");
 const timeDisplay = document.getElementById("time-display");
@@ -100,6 +101,7 @@ const tabEvents = document.getElementById("tab-events");
 
 algorithmSelect.addEventListener("change", async () => {
   currentAlgorithmKey = algorithmSelect.value;
+  syncAlgorithmButtons();
   await loadSelectedSource();
 });
 
@@ -312,6 +314,35 @@ function updateAlgorithmOptions(options) {
   const availableKeys = options.map((o) => o.key);
   currentAlgorithmKey = availableKeys.includes(currentValue) ? currentValue : availableKeys[0];
   algorithmSelect.value = currentAlgorithmKey;
+  renderAlgorithmButtons(options);
+  syncAlgorithmButtons();
+}
+
+function renderAlgorithmButtons(options) {
+  algorithmButtons.innerHTML = "";
+  for (const option of options) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "algorithm-chip";
+    button.dataset.algorithm = option.key;
+    button.textContent = option.label;
+    button.addEventListener("click", async () => {
+      if (currentAlgorithmKey === option.key) return;
+      currentAlgorithmKey = option.key;
+      algorithmSelect.value = option.key;
+      syncAlgorithmButtons();
+      await loadSelectedSource();
+    });
+    algorithmButtons.appendChild(button);
+  }
+}
+
+function syncAlgorithmButtons() {
+  algorithmButtons.querySelectorAll(".algorithm-chip").forEach((button) => {
+    const active = button.dataset.algorithm === currentAlgorithmKey;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
 }
 
 async function initializeDataSelectors() {

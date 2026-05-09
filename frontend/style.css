@@ -96,6 +96,39 @@ body {
   gap: 10px;
 }
 
+.algorithm-picker,
+.algorithm-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.algorithm-chip {
+  min-width: 48px;
+  padding: 4px 10px;
+  background: var(--bg-inner);
+  border: 1px solid var(--border-hud);
+  border-radius: var(--radius-hud);
+  color: var(--text-dim);
+  font-family: var(--font-sans);
+  font-size: 0.76rem;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: border-color var(--transition), color var(--transition), background var(--transition);
+}
+
+.algorithm-chip:hover {
+  border-color: var(--border-glow);
+  color: var(--text-secondary);
+}
+
+.algorithm-chip.active {
+  background: rgba(34, 211, 238, 0.1);
+  border-color: rgba(34, 211, 238, 0.35);
+  color: var(--accent-cyan);
+}
+
 /* Selects */
 .hud-select {
   position: relative;
@@ -894,6 +927,10 @@ body {
 
   #left-hud,
   #right-hud {
+    display: none;
+  }
+
+  .algorithm-buttons {
     display: none;
   }
 }
